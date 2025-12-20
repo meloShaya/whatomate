@@ -92,9 +92,17 @@ frontend-install:
 	cd frontend && npm install
 
 frontend-dev:
+	@if [ ! -d "frontend/node_modules" ]; then \
+		echo "Installing frontend dependencies..."; \
+		cd frontend && npm install; \
+	fi
 	cd frontend && npm run dev
 
 frontend-build:
+	@if [ ! -d "frontend/node_modules" ]; then \
+		echo "Installing frontend dependencies..."; \
+		cd frontend && npm install; \
+	fi
 	cd frontend && npm run build
 
 frontend-preview:
