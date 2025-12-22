@@ -41,6 +41,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { campaignsService, templatesService, accountsService } from '@/services/api'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from 'vue-sonner'
 import {
   Plus,
@@ -57,7 +58,10 @@ import {
   Loader2,
   Upload,
   UserPlus,
-  Eye
+  Eye,
+  FileSpreadsheet,
+  AlertTriangle,
+  Check
 } from 'lucide-vue-next'
 import { formatDate } from '@/lib/utils'
 
@@ -84,6 +88,23 @@ interface Template {
   name: string
   display_name?: string
   status: string
+  body_content?: string
+}
+
+interface CSVRow {
+  phone_number: string
+  name: string
+  params: string[]
+  isValid: boolean
+  errors: string[]
+}
+
+interface CSVValidation {
+  isValid: boolean
+  rows: CSVRow[]
+  templateParams: number
+  csvColumns: string[]
+  errors: string[]
 }
 
 interface Account {
@@ -117,6 +138,13 @@ const recipients = ref<Recipient[]>([])
 const isLoadingRecipients = ref(false)
 const isAddingRecipients = ref(false)
 const recipientsInput = ref('')
+
+// CSV upload state
+const csvFile = ref<File | null>(null)
+const csvValidation = ref<CSVValidation | null>(null)
+const isValidatingCSV = ref(false)
+const selectedTemplate = ref<Template | null>(null)
+const addRecipientsTab = ref('manual')
 
 // Form state
 const newCampaign = ref({
@@ -338,12 +366,6 @@ async function viewRecipients(campaign: Campaign) {
   }
 }
 
-function openAddRecipientsDialog(campaign: Campaign) {
-  selectedCampaign.value = campaign
-  recipientsInput.value = ''
-  showAddRecipientsDialog.value = true
-}
-
 async function addRecipients() {
   if (!selectedCampaign.value) return
 
@@ -412,6 +434,242 @@ function getRecipientStatusBadge(status: string): 'default' | 'secondary' | 'des
       return 'destructive'
     default:
       return 'outline'
+  }
+}
+
+// CSV functions
+function extractTemplateParams(bodyContent: string): number {
+  // Extract {{1}}, {{2}}, etc. from template body
+  const matches = bodyContent.match(/\{\{(\d+)\}\}/g) || []
+  const paramNumbers = matches.map(m => parseInt(m.replace(/[{}]/g, '')))
+  return paramNumbers.length > 0 ? Math.max(...paramNumbers) : 0
+}
+
+async function openAddRecipientsDialog(campaign: Campaign) {
+  selectedCampaign.value = campaign
+  recipientsInput.value = ''
+  csvFile.value = null
+  csvValidation.value = null
+  addRecipientsTab.value = 'manual'
+
+  // Fetch template details to get body_content
+  if (campaign.template_id) {
+    try {
+      const response = await templatesService.get(campaign.template_id)
+      selectedTemplate.value = response.data.data || response.data
+    } catch (error) {
+      console.error('Failed to fetch template:', error)
+      selectedTemplate.value = null
+    }
+  }
+
+  showAddRecipientsDialog.value = true
+}
+
+function handleCSVFileSelect(event: Event) {
+  const input = event.target as HTMLInputElement
+  if (input.files && input.files[0]) {
+    csvFile.value = input.files[0]
+    validateCSV()
+  }
+}
+
+async function validateCSV() {
+  if (!csvFile.value || !selectedTemplate.value) return
+
+  isValidatingCSV.value = true
+  csvValidation.value = null
+
+  try {
+    const text = await csvFile.value.text()
+    const lines = text.split('\n').filter(line => line.trim())
+
+    if (lines.length === 0) {
+      csvValidation.value = {
+        isValid: false,
+        rows: [],
+        templateParams: 0,
+        csvColumns: [],
+        errors: ['CSV file is empty']
+      }
+      return
+    }
+
+    // Parse header row
+    const headerLine = lines[0]
+    const headers = parseCSVLine(headerLine).map(h => h.toLowerCase().trim())
+
+    // Find required columns
+    const phoneIndex = headers.findIndex(h =>
+      h === 'phone' || h === 'phone_number' || h === 'phonenumber' || h === 'mobile' || h === 'number'
+    )
+    const nameIndex = headers.findIndex(h =>
+      h === 'name' || h === 'recipient_name' || h === 'recipientname' || h === 'customer_name'
+    )
+
+    // Get template param count
+    const templateParamCount = selectedTemplate.value.body_content
+      ? extractTemplateParams(selectedTemplate.value.body_content)
+      : 0
+
+    const globalErrors: string[] = []
+
+    if (phoneIndex === -1) {
+      globalErrors.push('Missing required column: phone_number (or phone, mobile, number)')
+    }
+
+    // Identify param columns (columns after name, or all columns except phone if no name)
+    const paramColumns: number[] = []
+    for (let i = 0; i < headers.length; i++) {
+      if (i !== phoneIndex && i !== nameIndex) {
+        // Check if it's a param column (param1, param2, {{1}}, 1, etc.)
+        const header = headers[i]
+        if (header.match(/^(param\d*|\{\{\d+\}\}|\d+)$/) ||
+            (i > Math.max(phoneIndex, nameIndex) && phoneIndex !== -1)) {
+          paramColumns.push(i)
+        }
+      }
+    }
+
+    // Parse data rows
+    const rows: CSVRow[] = []
+    const seenPhones = new Map<string, number>() // phone -> first occurrence row index
+
+    for (let i = 1; i < lines.length; i++) {
+      const values = parseCSVLine(lines[i])
+      if (values.length === 0 || (values.length === 1 && !values[0].trim())) continue
+
+      const rowErrors: string[] = []
+      const phone = phoneIndex >= 0 ? values[phoneIndex]?.trim() || '' : ''
+      const cleanPhone = phone.replace(/[^\d+]/g, '') // Normalize for duplicate check
+      const name = nameIndex >= 0 ? values[nameIndex]?.trim() || '' : ''
+      const params: string[] = paramColumns.map(idx => values[idx]?.trim() || '')
+
+      // Validate phone number
+      if (!phone) {
+        rowErrors.push('Missing phone number')
+      } else if (!phone.match(/^\+?\d{10,15}$/)) {
+        rowErrors.push('Invalid phone number format')
+      } else {
+        // Check for duplicates
+        if (seenPhones.has(cleanPhone)) {
+          rowErrors.push(`Duplicate phone number (first seen in row ${seenPhones.get(cleanPhone)! + 1})`)
+        } else {
+          seenPhones.set(cleanPhone, rows.length)
+        }
+      }
+
+      // Validate params count if template requires params
+      if (templateParamCount > 0 && params.filter(p => p).length < templateParamCount) {
+        rowErrors.push(`Template requires ${templateParamCount} parameter(s), found ${params.filter(p => p).length}`)
+      }
+
+      rows.push({
+        phone_number: phone,
+        name,
+        params,
+        isValid: rowErrors.length === 0,
+        errors: rowErrors
+      })
+    }
+
+    const validRows = rows.filter(r => r.isValid)
+
+    csvValidation.value = {
+      isValid: globalErrors.length === 0 && validRows.length > 0,
+      rows,
+      templateParams: templateParamCount,
+      csvColumns: headers,
+      errors: globalErrors
+    }
+  } catch (error) {
+    console.error('Failed to parse CSV:', error)
+    csvValidation.value = {
+      isValid: false,
+      rows: [],
+      templateParams: 0,
+      csvColumns: [],
+      errors: ['Failed to parse CSV file']
+    }
+  } finally {
+    isValidatingCSV.value = false
+  }
+}
+
+function parseCSVLine(line: string): string[] {
+  const result: string[] = []
+  let current = ''
+  let inQuotes = false
+
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i]
+
+    if (char === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"'
+        i++
+      } else {
+        inQuotes = !inQuotes
+      }
+    } else if (char === ',' && !inQuotes) {
+      result.push(current)
+      current = ''
+    } else {
+      current += char
+    }
+  }
+  result.push(current)
+
+  return result
+}
+
+async function addRecipientsFromCSV() {
+  if (!selectedCampaign.value || !csvValidation.value) return
+
+  const validRows = csvValidation.value.rows.filter(r => r.isValid)
+  if (validRows.length === 0) {
+    toast.error('No valid rows to import')
+    return
+  }
+
+  const recipientsList = validRows.map(row => {
+    const recipient: { phone_number: string; recipient_name?: string; template_params?: Record<string, any> } = {
+      phone_number: row.phone_number.replace(/[^\d+]/g, '')
+    }
+    if (row.name) {
+      recipient.recipient_name = row.name
+    }
+    // Map params to template params
+    const params: Record<string, any> = {}
+    row.params.forEach((param, index) => {
+      if (param) {
+        params[String(index + 1)] = param
+      }
+    })
+    // If no explicit params but name exists, use name as first param
+    if (Object.keys(params).length === 0 && row.name) {
+      params["1"] = row.name
+    }
+    if (Object.keys(params).length > 0) {
+      recipient.template_params = params
+    }
+    return recipient
+  })
+
+  isAddingRecipients.value = true
+  try {
+    const response = await campaignsService.addRecipients(selectedCampaign.value.id, recipientsList)
+    const result = response.data.data
+    toast.success(`Added ${result?.added_count || recipientsList.length} recipients from CSV`)
+    showAddRecipientsDialog.value = false
+    csvFile.value = null
+    csvValidation.value = null
+    await fetchCampaigns()
+  } catch (error: any) {
+    const message = error.response?.data?.message || 'Failed to add recipients'
+    toast.error(message)
+  } finally {
+    isAddingRecipients.value = false
   }
 }
 </script>
@@ -587,7 +845,7 @@ function getRecipientStatusBadge(status: string): 'default' | 'secondary' | 'des
                 </Tooltip>
                 <Tooltip v-if="campaign.status === 'draft'">
                   <TooltipTrigger as-child>
-                    <Button variant="ghost" size="icon" @click="openAddRecipientsDialog(campaign)">
+                    <Button variant="ghost" size="icon" @click="openAddRecipientsDialog(campaign as any)">
                       <UserPlus class="h-4 w-4" />
                     </Button>
                   </TooltipTrigger>
@@ -691,7 +949,7 @@ function getRecipientStatusBadge(status: string): 'default' | 'secondary' | 'des
               variant="outline"
               size="sm"
               class="mt-4"
-              @click="showRecipientsDialog = false; openAddRecipientsDialog(selectedCampaign!)"
+              @click="showRecipientsDialog = false; openAddRecipientsDialog(selectedCampaign as any)"
             >
               <UserPlus class="h-4 w-4 mr-2" />
               Add Recipients
@@ -728,7 +986,7 @@ function getRecipientStatusBadge(status: string): 'default' | 'secondary' | 'des
           <Button
             v-if="selectedCampaign?.status === 'draft'"
             variant="outline"
-            @click="showRecipientsDialog = false; openAddRecipientsDialog(selectedCampaign!)"
+            @click="showRecipientsDialog = false; openAddRecipientsDialog(selectedCampaign as any)"
           >
             <UserPlus class="h-4 w-4 mr-2" />
             Add More
@@ -740,50 +998,211 @@ function getRecipientStatusBadge(status: string): 'default' | 'secondary' | 'des
 
     <!-- Add Recipients Dialog -->
     <Dialog v-model:open="showAddRecipientsDialog">
-      <DialogContent class="sm:max-w-[600px]">
+      <DialogContent class="sm:max-w-[700px] max-h-[85vh]">
         <DialogHeader>
           <DialogTitle>Add Recipients</DialogTitle>
           <DialogDescription>
             Add recipients to "{{ selectedCampaign?.name }}"
+            <span v-if="selectedTemplate?.body_content" class="block mt-1">
+              Template requires {{ extractTemplateParams(selectedTemplate.body_content) }} parameter(s)
+            </span>
           </DialogDescription>
         </DialogHeader>
-        <div class="py-4 space-y-4">
-          <div class="bg-muted p-3 rounded-lg text-sm">
-            <p class="font-medium mb-2">Format (one per line):</p>
-            <ul class="list-disc list-inside text-muted-foreground space-y-1">
-              <li><code class="bg-background px-1 rounded">phone_number</code></li>
-              <li><code class="bg-background px-1 rounded">phone_number, name</code></li>
-              <li><code class="bg-background px-1 rounded">phone_number, name, param1, param2, ...</code></li>
-            </ul>
-            <p class="mt-2 text-muted-foreground">
-              Template parameters (param1, param2, etc.) will be mapped to {"{{1}}"}, {"{{2}}"}, etc.
-            </p>
-          </div>
-          <div class="space-y-2">
-            <Label for="recipients">Recipients</Label>
-            <Textarea
-              id="recipients"
-              v-model="recipientsInput"
-              placeholder="+1234567890, John Doe
+
+        <Tabs v-model="addRecipientsTab" class="w-full">
+          <TabsList class="grid w-full grid-cols-2">
+            <TabsTrigger value="manual">
+              <UserPlus class="h-4 w-4 mr-2" />
+              Manual Entry
+            </TabsTrigger>
+            <TabsTrigger value="csv">
+              <FileSpreadsheet class="h-4 w-4 mr-2" />
+              Upload CSV
+            </TabsTrigger>
+          </TabsList>
+
+          <!-- Manual Entry Tab -->
+          <TabsContent value="manual" class="mt-4">
+            <div class="space-y-4">
+              <div class="bg-muted p-3 rounded-lg text-sm">
+                <p class="font-medium mb-2">Format (one per line):</p>
+                <ul class="list-disc list-inside text-muted-foreground space-y-1">
+                  <li><code class="bg-background px-1 rounded">phone_number</code></li>
+                  <li><code class="bg-background px-1 rounded">phone_number, name</code></li>
+                  <li><code class="bg-background px-1 rounded">phone_number, name, param1, param2, ...</code></li>
+                </ul>
+              </div>
+              <div class="space-y-2">
+                <Label for="recipients">Recipients</Label>
+                <Textarea
+                  id="recipients"
+                  v-model="recipientsInput"
+                  placeholder="+1234567890, John Doe
 +0987654321, Jane Smith
 +1122334455"
-              rows="10"
-              class="font-mono text-sm"
-              :disabled="isAddingRecipients"
-            />
-            <p class="text-xs text-muted-foreground">
-              {{ recipientsInput.split('\n').filter(l => l.trim()).length }} recipient(s) entered
-            </p>
-          </div>
-        </div>
-        <DialogFooter>
+                  rows="8"
+                  class="font-mono text-sm"
+                  :disabled="isAddingRecipients"
+                />
+                <p class="text-xs text-muted-foreground">
+                  {{ recipientsInput.split('\n').filter(l => l.trim()).length }} recipient(s) entered
+                </p>
+              </div>
+              <div class="flex justify-end">
+                <Button @click="addRecipients" :disabled="isAddingRecipients || !recipientsInput.trim()">
+                  <Loader2 v-if="isAddingRecipients" class="h-4 w-4 mr-2 animate-spin" />
+                  <Upload v-else class="h-4 w-4 mr-2" />
+                  Add Recipients
+                </Button>
+              </div>
+            </div>
+          </TabsContent>
+
+          <!-- CSV Upload Tab -->
+          <TabsContent value="csv" class="mt-4">
+            <div class="space-y-4">
+              <!-- CSV Format Info -->
+              <div class="bg-muted p-3 rounded-lg text-sm">
+                <p class="font-medium mb-2">CSV Format Requirements:</p>
+                <ul class="list-disc list-inside text-muted-foreground space-y-1">
+                  <li>First row must be headers</li>
+                  <li>Required column: <code class="bg-background px-1 rounded">phone_number</code> (or phone, mobile, number)</li>
+                  <li>Optional: <code class="bg-background px-1 rounded">name</code>, <code class="bg-background px-1 rounded">param1</code>, <code class="bg-background px-1 rounded">param2</code>, ...</li>
+                </ul>
+              </div>
+
+              <!-- File Upload -->
+              <div class="space-y-2">
+                <Label for="csv-file">Select CSV File</Label>
+                <div class="flex items-center gap-2">
+                  <Input
+                    id="csv-file"
+                    type="file"
+                    accept=".csv"
+                    @change="handleCSVFileSelect"
+                    :disabled="isValidatingCSV || isAddingRecipients"
+                    class="flex-1"
+                  />
+                  <Button
+                    v-if="csvFile"
+                    variant="outline"
+                    size="icon"
+                    @click="csvFile = null; csvValidation = null"
+                    :disabled="isValidatingCSV || isAddingRecipients"
+                  >
+                    <XCircle class="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+
+              <!-- Validation Results -->
+              <div v-if="isValidatingCSV" class="flex items-center justify-center py-8">
+                <Loader2 class="h-6 w-6 animate-spin text-muted-foreground" />
+                <span class="ml-2 text-muted-foreground">Validating CSV...</span>
+              </div>
+
+              <div v-else-if="csvValidation" class="space-y-4">
+                <!-- Global Errors -->
+                <div v-if="csvValidation.errors.length > 0" class="bg-destructive/10 border border-destructive/20 rounded-lg p-3">
+                  <div class="flex items-center gap-2 text-destructive font-medium mb-2">
+                    <AlertTriangle class="h-4 w-4" />
+                    Validation Errors
+                  </div>
+                  <ul class="list-disc list-inside text-sm text-destructive">
+                    <li v-for="error in csvValidation.errors" :key="error">{{ error }}</li>
+                  </ul>
+                </div>
+
+                <!-- Summary -->
+                <div class="flex flex-wrap items-center gap-4 text-sm">
+                  <div class="flex items-center gap-1">
+                    <Check class="h-4 w-4 text-green-600" />
+                    <span>{{ csvValidation.rows.filter(r => r.isValid).length }} valid</span>
+                  </div>
+                  <div v-if="csvValidation.rows.filter(r => !r.isValid).length > 0" class="flex items-center gap-1">
+                    <AlertTriangle class="h-4 w-4 text-destructive" />
+                    <span>{{ csvValidation.rows.filter(r => !r.isValid).length }} invalid</span>
+                  </div>
+                  <div v-if="csvValidation.rows.filter(r => r.errors.some(e => e.includes('Duplicate'))).length > 0" class="flex items-center gap-1 text-orange-600">
+                    <Users class="h-4 w-4" />
+                    <span>{{ csvValidation.rows.filter(r => r.errors.some(e => e.includes('Duplicate'))).length }} duplicates</span>
+                  </div>
+                  <div class="text-muted-foreground">
+                    Columns: {{ csvValidation.csvColumns.join(', ') }}
+                  </div>
+                </div>
+
+                <!-- Preview Table -->
+                <div v-if="csvValidation.rows.length > 0" class="border rounded-lg overflow-hidden">
+                  <ScrollArea class="h-[200px]">
+                    <table class="w-full text-sm">
+                      <thead class="sticky top-0 bg-muted border-b">
+                        <tr>
+                          <th class="text-left py-2 px-3 w-8"></th>
+                          <th class="text-left py-2 px-3">Phone</th>
+                          <th class="text-left py-2 px-3">Name</th>
+                          <th class="text-left py-2 px-3">Parameters</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr
+                          v-for="(row, index) in csvValidation.rows.slice(0, 50)"
+                          :key="index"
+                          :class="row.isValid ? '' : 'bg-destructive/5'"
+                          class="border-b last:border-0"
+                        >
+                          <td class="py-2 px-3">
+                            <Check v-if="row.isValid" class="h-4 w-4 text-green-600" />
+                            <Tooltip v-else>
+                              <TooltipTrigger>
+                                <AlertTriangle class="h-4 w-4 text-destructive" />
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <ul class="text-xs">
+                                  <li v-for="err in row.errors" :key="err">{{ err }}</li>
+                                </ul>
+                              </TooltipContent>
+                            </Tooltip>
+                          </td>
+                          <td class="py-2 px-3 font-mono">{{ row.phone_number || '-' }}</td>
+                          <td class="py-2 px-3">{{ row.name || '-' }}</td>
+                          <td class="py-2 px-3 text-muted-foreground">
+                            {{ row.params.filter(p => p).join(', ') || '-' }}
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </ScrollArea>
+                  <div v-if="csvValidation.rows.length > 50" class="text-xs text-muted-foreground text-center py-2 border-t">
+                    Showing first 50 of {{ csvValidation.rows.length }} rows
+                  </div>
+                </div>
+
+                <!-- Import Button -->
+                <div class="flex justify-end">
+                  <Button
+                    @click="addRecipientsFromCSV"
+                    :disabled="isAddingRecipients || !csvValidation.isValid || csvValidation.rows.filter(r => r.isValid).length === 0"
+                  >
+                    <Loader2 v-if="isAddingRecipients" class="h-4 w-4 mr-2 animate-spin" />
+                    <Upload v-else class="h-4 w-4 mr-2" />
+                    Import {{ csvValidation.rows.filter(r => r.isValid).length }} Recipients
+                  </Button>
+                </div>
+              </div>
+
+              <!-- Empty state -->
+              <div v-else class="text-center py-8 text-muted-foreground">
+                <FileSpreadsheet class="h-12 w-12 mx-auto mb-2 opacity-50" />
+                <p>Select a CSV file to preview and validate</p>
+              </div>
+            </div>
+          </TabsContent>
+        </Tabs>
+
+        <DialogFooter class="border-t pt-4 mt-4">
           <Button variant="outline" @click="showAddRecipientsDialog = false" :disabled="isAddingRecipients">
             Cancel
-          </Button>
-          <Button @click="addRecipients" :disabled="isAddingRecipients">
-            <Loader2 v-if="isAddingRecipients" class="h-4 w-4 mr-2 animate-spin" />
-            <Upload v-else class="h-4 w-4 mr-2" />
-            Add Recipients
           </Button>
         </DialogFooter>
       </DialogContent>

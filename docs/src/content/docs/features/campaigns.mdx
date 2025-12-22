@@ -37,6 +37,60 @@ Campaigns allow you to send bulk WhatsApp messages to multiple contacts at once.
 
 </Steps>
 
+## Adding Recipients
+
+You can add recipients to your campaign in two ways:
+
+### Manual Entry
+
+Add recipients one at a time by entering:
+- **Phone Number** - The recipient's WhatsApp number (with country code)
+- **Name** - Optional display name
+- **Parameters** - Template variable values for personalization
+
+### CSV Upload
+
+For bulk imports, upload a CSV file with your recipient data:
+
+<Steps>
+
+1. **Prepare Your CSV**
+
+   Create a CSV file with columns for phone number, name, and template parameters:
+   ```csv
+   phone,name,param1,param2
+   +1234567890,John Doe,Order #123,December 25
+   +0987654321,Jane Smith,Order #456,December 26
+   ```
+
+2. **Upload and Validate**
+
+   The system automatically validates your CSV against the selected template:
+   - Checks for required phone number column
+   - Validates parameter count matches template requirements
+   - Detects duplicate phone numbers
+   - Shows validation errors per row
+
+3. **Review and Import**
+
+   Preview the validation results before importing:
+   - View first 50 rows with status indicators
+   - See error details for invalid rows
+   - Only valid rows will be imported
+
+</Steps>
+
+<Aside type="tip">
+  **CSV Column Names**: The system recognizes various column names:
+  - Phone: `phone`, `phone_number`, `mobile`, `number`
+  - Name: `name`, `contact_name`, `customer_name`
+  - Parameters: `param1`, `param2`, etc. or `variable1`, `variable2`, etc.
+</Aside>
+
+<Aside type="caution">
+  **Duplicate Detection**: If the same phone number appears multiple times in your CSV, only the first occurrence will be valid. Subsequent duplicates will be flagged as errors.
+</Aside>
+
 ## Campaign Details
 
 ![Campaign Details](/whatomate/images/14-campaign-details.png)
