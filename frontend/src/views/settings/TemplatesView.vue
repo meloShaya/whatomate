@@ -584,11 +584,11 @@ function formatPreview(text: string, samples: any[]): string {
             <p class="text-lg font-medium">No templates found</p>
             <p class="text-sm mb-4">Create a new template or sync from Meta.</p>
             <div class="flex items-center justify-center gap-2">
-              <Button variant="outline" @click="syncTemplates" :disabled="!selectedAccount || selectedAccount === 'all'">
+              <Button variant="outline" size="sm" @click="syncTemplates" :disabled="!selectedAccount || selectedAccount === 'all'">
                 <RefreshCw class="h-4 w-4 mr-2" />
                 Sync from Meta
               </Button>
-              <Button @click="openCreateDialog">
+              <Button variant="outline" size="sm" @click="openCreateDialog">
                 <Plus class="h-4 w-4 mr-2" />
                 Create Template
               </Button>

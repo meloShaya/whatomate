@@ -285,7 +285,7 @@ const webhookUrl = window.location.origin + '/api/webhook'
             </BreadcrumbList>
           </Breadcrumb>
         </div>
-        <Button @click="openCreateDialog">
+        <Button variant="outline" size="sm" @click="openCreateDialog">
           <Plus class="h-4 w-4 mr-2" />
           Add Account
         </Button>
@@ -472,7 +472,7 @@ const webhookUrl = window.location.origin + '/api/webhook'
             <Phone class="h-12 w-12 mx-auto mb-4 opacity-50" />
             <p class="text-lg font-medium">No WhatsApp accounts connected</p>
             <p class="text-sm mb-4">Connect your WhatsApp Business account to start sending and receiving messages.</p>
-            <Button @click="openCreateDialog">
+            <Button variant="outline" size="sm" @click="openCreateDialog">
               <Plus class="h-4 w-4 mr-2" />
               Add Account
             </Button>

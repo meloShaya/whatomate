@@ -281,7 +281,7 @@ function getSourceBadge(source: string) {
             <Users class="h-4 w-4 inline mr-1" />
             {{ transfersStore.queueCount }} waiting in queue
           </div>
-          <Button @click="pickNextTransfer" :disabled="isPicking || transfersStore.queueCount === 0">
+          <Button variant="outline" size="sm" @click="pickNextTransfer" :disabled="isPicking || transfersStore.queueCount === 0">
             <Loader2 v-if="isPicking" class="mr-2 h-4 w-4 animate-spin" />
             <Play v-else class="mr-2 h-4 w-4" />
             Pick Next

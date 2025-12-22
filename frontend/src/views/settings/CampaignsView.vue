@@ -920,7 +920,7 @@ async function addRecipientsFromCSV() {
             <Megaphone class="h-12 w-12 mx-auto mb-4 opacity-50" />
             <p class="text-lg font-medium">No campaigns yet</p>
             <p class="text-sm mb-4">Create your first bulk messaging campaign.</p>
-            <Button @click="showCreateDialog = true">
+            <Button variant="outline" size="sm" @click="showCreateDialog = true">
               <Plus class="h-4 w-4 mr-2" />
               Create Campaign
             </Button>

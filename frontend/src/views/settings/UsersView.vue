@@ -293,7 +293,7 @@ function goToPage(page: number) {
             </BreadcrumbList>
           </Breadcrumb>
         </div>
-        <Button @click="openCreateDialog">
+        <Button variant="outline" size="sm" @click="openCreateDialog">
           <Plus class="h-4 w-4 mr-2" />
           Add User
         </Button>

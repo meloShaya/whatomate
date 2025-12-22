@@ -511,7 +511,7 @@ function formatDate(dateStr: string): string {
             <Workflow class="h-12 w-12 mx-auto mb-4 opacity-50" />
             <p class="text-lg font-medium">No WhatsApp Flows yet</p>
             <p class="text-sm mb-4">Create interactive flows to engage your customers.</p>
-            <Button @click="openCreateDialog">
+            <Button variant="outline" size="sm" @click="openCreateDialog">
               <Plus class="h-4 w-4 mr-2" />
               Create Flow
             </Button>
