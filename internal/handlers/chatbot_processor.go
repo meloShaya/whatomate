@@ -103,16 +103,16 @@ func (a *App) processIncomingMessageFull(phoneNumberID string, msg IncomingTextM
 		"profile_name", profileName,
 	)
 
-	// Find the WhatsApp account by phone_number_id
-	var account models.WhatsAppAccount
-	if err := a.DB.Where("phone_id = ?", phoneNumberID).First(&account).Error; err != nil {
+	// Find the WhatsApp account by phone_number_id (use cache)
+	account, err := a.getWhatsAppAccountCached(phoneNumberID)
+	if err != nil {
 		a.Log.Error("WhatsApp account not found", "phone_id", phoneNumberID, "error", err)
 		return
 	}
 
 	// Handle reaction messages specially - they update existing messages, not create new ones
 	if msg.Type == "reaction" && msg.Reaction != nil {
-		a.handleIncomingReaction(&account, msg.From, msg.Reaction.MessageID, msg.Reaction.Emoji, profileName)
+		a.handleIncomingReaction(account, msg.From, msg.Reaction.MessageID, msg.Reaction.Emoji, profileName)
 		return
 	}
 
@@ -280,7 +280,7 @@ func (a *App) processIncomingMessageFull(phoneNumberID string, msg IncomingTextM
 	if msg.Context != nil && msg.Context.ID != "" {
 		replyToWAMID = msg.Context.ID
 	}
-	a.saveIncomingMessage(&account, contact, msg.ID, messageType, messageText, mediaInfo, replyToWAMID)
+	a.saveIncomingMessage(account, contact, msg.ID, messageType, messageText, mediaInfo, replyToWAMID)
 
 	// Clear chatbot tracking since client has replied
 	a.ClearContactChatbotTracking(contact.ID)
@@ -302,7 +302,7 @@ func (a *App) processIncomingMessageFull(phoneNumberID string, msg IncomingTextM
 	if !settings.IsEnabled {
 		a.Log.Debug("Chatbot not enabled for this account, creating transfer for agent queue", "account", account.Name, "settings_id", settings.ID)
 		// Create transfer to agent queue when chatbot is disabled
-		a.createTransferToQueue(&account, contact, "chatbot_disabled")
+		a.createTransferToQueue(account, contact, "chatbot_disabled")
 		return
 	}
 	a.Log.Info("Chatbot settings loaded", "settings_id", settings.ID, "is_enabled", settings.IsEnabled, "ai_enabled", settings.AIEnabled, "ai_provider", settings.AIProvider, "default_response", settings.DefaultResponse)
@@ -314,7 +314,7 @@ func (a *App) processIncomingMessageFull(phoneNumberID string, msg IncomingTextM
 			if !settings.AllowAutomatedOutsideHours {
 				a.Log.Info("Outside business hours, sending out of hours message")
 				if settings.OutOfHoursMessage != "" {
-					a.sendAndSaveTextMessage(&account, contact, settings.OutOfHoursMessage)
+					a.sendAndSaveTextMessage(account, contact, settings.OutOfHoursMessage)
 				}
 				return
 			}
@@ -346,28 +346,28 @@ func (a *App) processIncomingMessageFull(phoneNumberID string, msg IncomingTextM
 			if !a.isWithinBusinessHours(settings.BusinessHours) {
 				a.Log.Info("Outside business hours, sending out of hours message instead of transfer")
 				if settings.OutOfHoursMessage != "" {
-					a.sendAndSaveTextMessage(&account, contact, settings.OutOfHoursMessage)
+					a.sendAndSaveTextMessage(account, contact, settings.OutOfHoursMessage)
 				}
 				return
 			}
 		}
 		// Within business hours - send transfer message and create transfer
 		if keywordResponse.Body != "" {
-			a.sendAndSaveTextMessage(&account, contact, keywordResponse.Body)
+			a.sendAndSaveTextMessage(account, contact, keywordResponse.Body)
 		}
-		a.createTransferFromKeyword(&account, contact)
+		a.createTransferFromKeyword(account, contact)
 		return
 	}
 
 	// Check if user is in an active flow
 	if session.CurrentFlowID != nil {
-		a.processFlowResponse(&account, session, contact, messageText, buttonID)
+		a.processFlowResponse(account, session, contact, messageText, buttonID)
 		return
 	}
 
 	// Try to match flow trigger keywords first (before greeting to avoid duplicate messages)
 	if flow := a.matchFlowTrigger(account.OrganizationID, account.Name, messageText); flow != nil {
-		a.startFlow(&account, session, contact, flow)
+		a.startFlow(account, session, contact, flow)
 		return
 	}
 
@@ -382,12 +382,12 @@ func (a *App) processIncomingMessageFull(phoneNumberID string, msg IncomingTextM
 				}
 			}
 			if len(greetingButtons) > 0 {
-				a.sendAndSaveInteractiveButtons(&account, contact, settings.DefaultResponse, greetingButtons)
+				a.sendAndSaveInteractiveButtons(account, contact, settings.DefaultResponse, greetingButtons)
 			} else {
-				a.sendAndSaveTextMessage(&account, contact, settings.DefaultResponse)
+				a.sendAndSaveTextMessage(account, contact, settings.DefaultResponse)
 			}
 		} else {
-			a.sendAndSaveTextMessage(&account, contact, settings.DefaultResponse)
+			a.sendAndSaveTextMessage(account, contact, settings.DefaultResponse)
 		}
 		a.logSessionMessage(session.ID, "outgoing", settings.DefaultResponse, "greeting")
 		return // After greeting, don't process further for new sessions
@@ -399,9 +399,9 @@ func (a *App) processIncomingMessageFull(phoneNumberID string, msg IncomingTextM
 
 		// Handle regular text response
 		if len(keywordResponse.Buttons) > 0 {
-			a.sendAndSaveInteractiveButtons(&account, contact, keywordResponse.Body, keywordResponse.Buttons)
+			a.sendAndSaveInteractiveButtons(account, contact, keywordResponse.Body, keywordResponse.Buttons)
 		} else {
-			a.sendAndSaveTextMessage(&account, contact, keywordResponse.Body)
+			a.sendAndSaveTextMessage(account, contact, keywordResponse.Body)
 		}
 		// Log outgoing message
 		a.logSessionMessage(session.ID, "outgoing", keywordResponse.Body, "keyword_response")
@@ -417,7 +417,7 @@ func (a *App) processIncomingMessageFull(phoneNumberID string, msg IncomingTextM
 			// Fall through to default response
 		} else if aiResponse != "" {
 			a.Log.Info("AI response generated successfully", "response_length", len(aiResponse))
-			a.sendAndSaveTextMessage(&account, contact, aiResponse)
+			a.sendAndSaveTextMessage(account, contact, aiResponse)
 			a.logSessionMessage(session.ID, "outgoing", aiResponse, "ai_response")
 			return
 		} else {
@@ -439,12 +439,12 @@ func (a *App) processIncomingMessageFull(phoneNumberID string, msg IncomingTextM
 				}
 			}
 			if len(fallbackButtons) > 0 {
-				a.sendAndSaveInteractiveButtons(&account, contact, settings.FallbackMessage, fallbackButtons)
+				a.sendAndSaveInteractiveButtons(account, contact, settings.FallbackMessage, fallbackButtons)
 			} else {
-				a.sendAndSaveTextMessage(&account, contact, settings.FallbackMessage)
+				a.sendAndSaveTextMessage(account, contact, settings.FallbackMessage)
 			}
 		} else {
-			a.sendAndSaveTextMessage(&account, contact, settings.FallbackMessage)
+			a.sendAndSaveTextMessage(account, contact, settings.FallbackMessage)
 		}
 		a.logSessionMessage(session.ID, "outgoing", settings.FallbackMessage, "fallback_response")
 	} else if !isNewSession {

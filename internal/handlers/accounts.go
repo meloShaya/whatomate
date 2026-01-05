@@ -226,6 +226,9 @@ func (a *App) UpdateAccount(r *fastglue.Request) error {
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to update account", nil, "")
 	}
 
+	// Invalidate cache
+	a.InvalidateWhatsAppAccountCache(account.PhoneID)
+
 	return r.SendEnvelope(accountToResponse(account))
 }
 
@@ -242,14 +245,19 @@ func (a *App) DeleteAccount(r *fastglue.Request) error {
 		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "Invalid account ID", nil, "")
 	}
 
-	result := a.DB.Where("id = ? AND organization_id = ?", id, orgID).Delete(&models.WhatsAppAccount{})
-	if result.Error != nil {
-		a.Log.Error("Failed to delete account", "error", result.Error)
-		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to delete account", nil, "")
-	}
-	if result.RowsAffected == 0 {
+	// Get account first for cache invalidation
+	var account models.WhatsAppAccount
+	if err := a.DB.Where("id = ? AND organization_id = ?", id, orgID).First(&account).Error; err != nil {
 		return r.SendErrorEnvelope(fasthttp.StatusNotFound, "Account not found", nil, "")
 	}
+
+	if err := a.DB.Delete(&account).Error; err != nil {
+		a.Log.Error("Failed to delete account", "error", err)
+		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to delete account", nil, "")
+	}
+
+	// Invalidate cache
+	a.InvalidateWhatsAppAccountCache(account.PhoneID)
 
 	return r.SendEnvelope(map[string]string{"message": "Account deleted successfully"})
 }

@@ -128,6 +128,9 @@ func (a *App) CreateWebhook(r *fastglue.Request) error {
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to create webhook", nil, "")
 	}
 
+	// Invalidate cache
+	a.InvalidateWebhooksCache(orgID)
+
 	return r.SendEnvelope(webhookToResponse(webhook))
 }
 
@@ -184,6 +187,9 @@ func (a *App) UpdateWebhook(r *fastglue.Request) error {
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to update webhook", nil, "")
 	}
 
+	// Invalidate cache
+	a.InvalidateWebhooksCache(orgID)
+
 	return r.SendEnvelope(webhookToResponse(webhook))
 }
 
@@ -207,6 +213,9 @@ func (a *App) DeleteWebhook(r *fastglue.Request) error {
 	if result.RowsAffected == 0 {
 		return r.SendErrorEnvelope(fasthttp.StatusNotFound, "Webhook not found", nil, "")
 	}
+
+	// Invalidate cache
+	a.InvalidateWebhooksCache(orgID)
 
 	return r.SendEnvelope(map[string]string{"message": "Webhook deleted successfully"})
 }

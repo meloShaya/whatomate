@@ -70,9 +70,9 @@ func (a *App) DispatchWebhook(orgID uuid.UUID, eventType string, data interface{
 }
 
 func (a *App) dispatchWebhookAsync(orgID uuid.UUID, eventType string, data interface{}) {
-	// Find all active webhooks for this org that subscribe to this event
-	var webhooks []models.Webhook
-	if err := a.DB.Where("organization_id = ? AND is_active = ?", orgID, true).Find(&webhooks).Error; err != nil {
+	// Find all active webhooks for this org that subscribe to this event (use cache)
+	webhooks, err := a.getWebhooksCached(orgID)
+	if err != nil {
 		a.Log.Error("failed to fetch webhooks", "error", err)
 		return
 	}

@@ -13,14 +13,18 @@ import (
 
 const (
 	// Cache TTLs
-	settingsCacheTTL     = 5 * time.Minute
-	flowsCacheTTL        = 5 * time.Minute
-	keywordRulesCacheTTL = 5 * time.Minute
+	settingsCacheTTL       = 5 * time.Minute
+	flowsCacheTTL          = 5 * time.Minute
+	keywordRulesCacheTTL   = 5 * time.Minute
+	whatsappAccountCacheTTL = 10 * time.Minute
+	webhooksCacheTTL       = 5 * time.Minute
 
 	// Cache key prefixes
-	settingsCachePrefix     = "chatbot:settings:"
-	flowsCachePrefix        = "chatbot:flows:"
-	keywordRulesCachePrefix = "chatbot:keywords:"
+	settingsCachePrefix        = "chatbot:settings:"
+	flowsCachePrefix           = "chatbot:flows:"
+	keywordRulesCachePrefix    = "chatbot:keywords:"
+	whatsappAccountCachePrefix = "whatsapp:account:"
+	webhooksCachePrefix        = "webhooks:"
 )
 
 // getChatbotSettingsCached retrieves chatbot settings from cache or database
@@ -173,4 +177,74 @@ func (a *App) deleteKeysByPattern(ctx context.Context, pattern string) {
 	for iter.Next(ctx) {
 		a.Redis.Del(ctx, iter.Val())
 	}
+}
+
+// getWhatsAppAccountCached retrieves WhatsApp account by phone_id from cache or database
+func (a *App) getWhatsAppAccountCached(phoneID string) (*models.WhatsAppAccount, error) {
+	ctx := context.Background()
+	cacheKey := fmt.Sprintf("%s%s", whatsappAccountCachePrefix, phoneID)
+
+	// Try cache first
+	cached, err := a.Redis.Get(ctx, cacheKey).Result()
+	if err == nil && cached != "" {
+		var account models.WhatsAppAccount
+		if err := json.Unmarshal([]byte(cached), &account); err == nil {
+			return &account, nil
+		}
+	}
+
+	// Cache miss - fetch from database
+	var account models.WhatsAppAccount
+	if err := a.DB.Where("phone_id = ?", phoneID).First(&account).Error; err != nil {
+		return nil, err
+	}
+
+	// Cache the result
+	if data, err := json.Marshal(account); err == nil {
+		a.Redis.Set(ctx, cacheKey, data, whatsappAccountCacheTTL)
+	}
+
+	return &account, nil
+}
+
+// InvalidateWhatsAppAccountCache invalidates the WhatsApp account cache
+func (a *App) InvalidateWhatsAppAccountCache(phoneID string) {
+	ctx := context.Background()
+	cacheKey := fmt.Sprintf("%s%s", whatsappAccountCachePrefix, phoneID)
+	a.Redis.Del(ctx, cacheKey)
+}
+
+// getWebhooksCached retrieves active webhooks for an organization from cache or database
+func (a *App) getWebhooksCached(orgID uuid.UUID) ([]models.Webhook, error) {
+	ctx := context.Background()
+	cacheKey := fmt.Sprintf("%s%s", webhooksCachePrefix, orgID.String())
+
+	// Try cache first
+	cached, err := a.Redis.Get(ctx, cacheKey).Result()
+	if err == nil && cached != "" {
+		var webhooks []models.Webhook
+		if err := json.Unmarshal([]byte(cached), &webhooks); err == nil {
+			return webhooks, nil
+		}
+	}
+
+	// Cache miss - fetch from database
+	var webhooks []models.Webhook
+	if err := a.DB.Where("organization_id = ? AND is_active = ?", orgID, true).Find(&webhooks).Error; err != nil {
+		return nil, err
+	}
+
+	// Cache the result
+	if data, err := json.Marshal(webhooks); err == nil {
+		a.Redis.Set(ctx, cacheKey, data, webhooksCacheTTL)
+	}
+
+	return webhooks, nil
+}
+
+// InvalidateWebhooksCache invalidates the webhooks cache for an organization
+func (a *App) InvalidateWebhooksCache(orgID uuid.UUID) {
+	ctx := context.Background()
+	cacheKey := fmt.Sprintf("%s%s", webhooksCachePrefix, orgID.String())
+	a.Redis.Del(ctx, cacheKey)
 }
