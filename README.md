@@ -158,18 +158,34 @@ whatomate/
 ### Docker Setup
 
 ```bash
-cd docker
-docker compose up -d
+# Build Docker images
+make docker-build
+
+# Start all services (PostgreSQL, Redis, Server, Worker)
+make docker-up
 ```
 
-Access the application at `http://localhost:3000`
+Access the application at `http://localhost:3000` or `http://localhost` (port 80 via nginx)
+
+#### Other Docker Commands
+
+```bash
+# Stop all services
+make docker-down
+
+# View logs
+make docker-logs
+
+# Rebuild and restart
+make docker-build && make docker-up
+```
 
 #### Scaling Workers
 
 For high-volume campaign processing, you can scale the worker service:
 
 ```bash
-# Run with 3 worker instances
+cd docker
 docker compose up -d --scale worker=3
 ```
 

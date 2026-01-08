@@ -604,17 +604,23 @@ function confirmCancel() {
           <ArrowLeft class="h-5 w-5" />
         </Button>
 
-        <div class="flex-1 flex items-center gap-4">
-          <Input
-            v-model="formData.name"
-            placeholder="Flow Name"
-            class="max-w-xs font-medium"
-          />
-          <Input
-            v-model="formData.description"
-            placeholder="Description (optional)"
-            class="max-w-md text-muted-foreground"
-          />
+        <div class="flex-1 flex items-center gap-6">
+          <div class="flex items-center gap-2">
+            <Label class="text-sm text-muted-foreground whitespace-nowrap">Name</Label>
+            <Input
+              v-model="formData.name"
+              placeholder="Enter flow name"
+              class="w-48 font-medium"
+            />
+          </div>
+          <div class="flex items-center gap-2">
+            <Label class="text-sm text-muted-foreground whitespace-nowrap">Description</Label>
+            <Input
+              v-model="formData.description"
+              placeholder="Optional"
+              class="w-64"
+            />
+          </div>
         </div>
 
         <div class="flex items-center gap-3">
