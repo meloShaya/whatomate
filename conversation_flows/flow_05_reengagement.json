@@ -1,0 +1,203 @@
+{
+	"name": "Re-Engagement & Recovery",
+	"description": "The 'Still Interested?' Recovery Flow - Follow-up for incomplete leads and warm prospects",
+	"trigger_keywords": [
+		"back",
+		"still interested",
+		"following up",
+		"ready",
+		"claim"
+	],
+	"initial_message": "Hey! 👋 Welcome back!\n\nI noticed we were chatting earlier. Everything okay?\n\nQuick check:\nA) Yes, still interested - let's finish!\nB) Need more info first\nC) Not the right time anymore\nD) I already signed up somehow",
+	"completion_message": "🎉 Welcome back and all set!\n\nYou'll hear from our team within 24 hours at {{customer_phone}}.\n\nConfirmation going to {{customer_email}}.\n\nQuestions? Message here anytime! 💬",
+	"enabled": true,
+	"panel_config": {
+		"sections": [
+			{
+				"id": "reengagement_info",
+				"label": "Re-Engagement",
+				"columns": 2,
+				"order": 1,
+				"fields": [
+					{ "key": "customer_name", "label": "Name", "order": 1 },
+					{ "key": "customer_phone", "label": "Phone", "order": 2 },
+					{ "key": "customer_email", "label": "Email", "order": 3 },
+					{
+						"key": "reengagement_status",
+						"label": "Status",
+						"order": 4,
+						"display_type": "badge"
+					}
+				]
+			}
+		]
+	},
+	"steps": [
+		{
+			"step_name": "reengagement_check",
+			"step_order": 1,
+			"message": "",
+			"message_type": "buttons",
+			"input_type": "select",
+			"store_as": "reengagement_status",
+			"buttons": [
+				{ "id": "still_interested", "title": "A) Still interested!" },
+				{ "id": "need_info", "title": "B) Need more info" },
+				{ "id": "not_now", "title": "C) Not right time" },
+				{ "id": "already_signed", "title": "D) Already signed up" }
+			],
+			"conditional_next": {
+				"still_interested": "resume_flow",
+				"need_info": "info_questions",
+				"not_now": "not_now_response",
+				"already_signed": "check_signup"
+			}
+		},
+		{
+			"step_name": "resume_flow",
+			"step_order": 2,
+			"message": "Awesome! Let's get you locked in. 🔒\n\nQuick reminder of what you're getting:\n\n✅ FREE AI WhatsApp Chatbot\n✅ Custom training on your business\n✅ 24/7 lead capture\n✅ 30-day support\n✅ $1,700 value for $0\n\nSpots are filling fast!\n\nLet me grab the info we need...\n\nWhat's your name?",
+			"message_type": "text",
+			"input_type": "text",
+			"store_as": "customer_name",
+			"next_step": "capture_phone_reengage"
+		},
+		{
+			"step_name": "info_questions",
+			"step_order": 3,
+			"message": "No problem! What do you want to know?\n\nCommon questions:\n1️⃣ Is it really free? (YES!)\n2️⃣ What's the catch? (None - limited spots only)\n3️⃣ Will it work for my business?\n4️⃣ How long does setup take? (48-72 hours)\n5️⃣ Something else?",
+			"message_type": "buttons",
+			"input_type": "select",
+			"store_as": "info_question",
+			"buttons": [
+				{ "id": "is_free", "title": "1️⃣ Really free?" },
+				{ "id": "catch", "title": "2️⃣ What's the catch?" },
+				{ "id": "my_business", "title": "3️⃣ For my business?" },
+				{ "id": "setup_time", "title": "4️⃣ Setup time?" },
+				{ "id": "other", "title": "5️⃣ Something else" }
+			],
+			"next_step": "answer_and_push"
+		},
+		{
+			"step_name": "answer_and_push",
+			"step_order": 4,
+			"message": "Great question!\n\n✅ Yes, 100% free - no credit card, no catch\n✅ We do this to prove our value (7 spots/month)\n✅ Works for any business type\n✅ Live in 48-72 hours\n\nReady to claim your spot now?",
+			"message_type": "buttons",
+			"input_type": "select",
+			"store_as": "ready_now",
+			"buttons": [
+				{ "id": "yes", "title": "Yes, let's go!" },
+				{ "id": "more_questions", "title": "More questions" }
+			],
+			"conditional_next": {
+				"yes": "resume_flow",
+				"more_questions": "info_questions"
+			}
+		},
+		{
+			"step_name": "not_now_response",
+			"step_order": 5,
+			"message": "Totally understand! Life gets busy.\n\nBut quick question - is it timing, or something about the offer?\n\nA) Just bad timing (but love the idea)\nB) Not sure it's right for my business\nC) Other reason",
+			"message_type": "buttons",
+			"input_type": "select",
+			"store_as": "not_now_reason",
+			"buttons": [
+				{ "id": "timing", "title": "A) Bad timing" },
+				{ "id": "not_sure_fit", "title": "B) Not sure if right" },
+				{ "id": "other", "title": "C) Other reason" }
+			],
+			"next_step": "address_concern"
+		},
+		{
+			"step_name": "address_concern",
+			"step_order": 6,
+			"message": "I hear you!\n\nHere's an idea: What if I hold a spot for you for 48 hours?\n\nNo commitment. Just reserves your place in case you decide to move forward.\n\nWorth it?",
+			"message_type": "buttons",
+			"input_type": "select",
+			"store_as": "hold_spot",
+			"buttons": [
+				{ "id": "yes_hold", "title": "Yes, hold my spot" },
+				{ "id": "no_thanks", "title": "No thanks" }
+			],
+			"conditional_next": {
+				"yes_hold": "capture_email_hold",
+				"no_thanks": "soft_close"
+			}
+		},
+		{
+			"step_name": "capture_email_hold",
+			"step_order": 7,
+			"message": "Perfect! What's your email so I can send you a reminder before it expires?",
+			"message_type": "text",
+			"input_type": "email",
+			"store_as": "customer_email",
+			"next_step": "hold_confirmed"
+		},
+		{
+			"step_name": "hold_confirmed",
+			"step_order": 8,
+			"message": "Done! 🔒\n\nYour spot is held for 48 hours.\n\nI'll send a reminder to {{customer_email}} before it expires.\n\nWhen you're ready, just message \"READY\" and we'll finish the setup!\n\nTake care! 👋",
+			"message_type": "text",
+			"next_step": ""
+		},
+		{
+			"step_name": "check_signup",
+			"step_order": 9,
+			"message": "Oh! Let me check... 🔍\n\nHmm, I don't see your completion in the system.\n\nCan you tell me:\n→ What email you used?\n→ When you completed it?\n\n(If you DIDN'T complete it yet, we can finish now - takes 2 min!)",
+			"message_type": "text",
+			"input_type": "text",
+			"store_as": "signup_check_info",
+			"next_step": "verify_or_complete"
+		},
+		{
+			"step_name": "verify_or_complete",
+			"step_order": 10,
+			"message": "Thanks for that info!\n\nLet me verify with our team. In the meantime, want to make sure you're fully set up?\n\nI can quickly confirm your details.",
+			"message_type": "buttons",
+			"input_type": "select",
+			"store_as": "verify_action",
+			"buttons": [
+				{ "id": "yes_confirm", "title": "Yes, confirm my details" },
+				{ "id": "wait_team", "title": "Wait for team to check" }
+			],
+			"conditional_next": {
+				"yes_confirm": "resume_flow",
+				"wait_team": "transfer_to_human"
+			}
+		},
+		{
+			"step_name": "soft_close",
+			"step_order": 11,
+			"message": "No problem at all!\n\nIf you change your mind about the FREE chatbot, just message \"READY\" anytime.\n\nThose spots won't last long though! 😉\n\nTake care! 👋",
+			"message_type": "text",
+			"next_step": ""
+		},
+		{
+			"step_name": "capture_phone_reengage",
+			"step_order": 12,
+			"message": "Thanks {{customer_name}}! Phone number?",
+			"message_type": "text",
+			"input_type": "phone",
+			"store_as": "customer_phone",
+			"next_step": "capture_email_reengage"
+		},
+		{
+			"step_name": "capture_email_reengage",
+			"step_order": 13,
+			"message": "And email address?",
+			"message_type": "text",
+			"input_type": "email",
+			"store_as": "customer_email",
+			"next_step": ""
+		},
+		{
+			"step_name": "transfer_to_human",
+			"step_order": 14,
+			"message": "Connecting you with our team now! 👤\n\nSomeone will verify your account and be with you shortly.",
+			"message_type": "transfer",
+			"transfer_config": {
+				"notes": "Re-engagement: Checking previous signup for {{customer_email}}"
+			}
+		}
+	]
+}

@@ -56,3 +56,6 @@ uploads/
 
 # Test results
 test-results/
+
+# Go source code
+go/

@@ -1641,6 +1641,8 @@ func (a *App) generateAIResponse(settings *models.ChatbotSettings, session *mode
 		return a.generateAnthropicResponse(settings, session, userMessage, contextData)
 	case models.AIProviderGoogle:
 		return a.generateGoogleResponse(settings, session, userMessage, contextData)
+	case models.AIProviderOpenRouter:
+		return a.generateOpenRouterResponse(settings, session, userMessage, contextData)
 	default:
 		return "", fmt.Errorf("unsupported AI provider: %s", settings.AI.Provider)
 	}
@@ -2581,4 +2583,116 @@ func parseNumber(s string) (float64, error) {
 	var n float64
 	_, err := fmt.Sscanf(s, "%f", &n)
 	return n, err
+}
+
+// generateOpenRouterResponse generates a response using OpenRouter API
+func (a *App) generateOpenRouterResponse(settings *models.ChatbotSettings, session *models.ChatbotSession, userMessage string, contextData string) (string, error) {
+	url := "https://openrouter.ai/api/v1/chat/completions"
+
+	// Build messages array
+	messages := []map[string]string{}
+
+	// Build system prompt with context
+	systemPrompt := settings.AI.SystemPrompt
+	if contextData != "" {
+		if systemPrompt != "" {
+			systemPrompt = systemPrompt + "\n\n" + contextData
+		} else {
+			systemPrompt = contextData
+		}
+	}
+
+	// Add system prompt if configured
+	if systemPrompt != "" {
+		messages = append(messages, map[string]string{
+			"role":    "system",
+			"content": systemPrompt,
+		})
+	}
+
+	// Add conversation history if enabled
+	if settings.AI.IncludeHistory && session != nil {
+		history := a.getSessionHistory(session.ID, settings.AI.HistoryLimit)
+		for _, msg := range history {
+			role := "user"
+			if msg.Direction == models.DirectionOutgoing {
+				role = "assistant"
+			}
+			messages = append(messages, map[string]string{
+				"role":    role,
+				"content": msg.Message,
+			})
+		}
+	}
+
+	// Add current user message
+	messages = append(messages, map[string]string{
+		"role":    "user",
+		"content": userMessage,
+	})
+
+	payload := map[string]interface{}{
+		"model":      settings.AI.Model,
+		"messages":   messages,
+		"max_tokens": settings.AI.MaxTokens,
+	}
+
+	if settings.AI.Temperature > 0 {
+		payload["temperature"] = settings.AI.Temperature
+	}
+
+	jsonPayload, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal payload: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonPayload))
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+settings.AI.APIKey)
+	req.Header.Set("HTTP-Referer", "https://whatomate.io") // Required by OpenRouter
+	req.Header.Set("X-Title", "Whatomate")                 // Optional by OpenRouter
+
+	resp, err := a.HTTPClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != 200 {
+		var errResp struct {
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		_ = json.Unmarshal(body, &errResp)
+		// Fallback for non-standard error structure
+		errMsg := errResp.Error.Message
+		if errMsg == "" {
+			errMsg = string(body)
+		}
+		return "", fmt.Errorf("OpenRouter API error (status %d): %s", resp.StatusCode, errMsg)
+	}
+
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if len(result.Choices) > 0 {
+		return strings.TrimSpace(result.Choices[0].Message.Content), nil
+	}
+
+	return "", fmt.Errorf("no response from OpenRouter")
 }

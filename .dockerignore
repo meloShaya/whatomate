@@ -1,0 +1,31 @@
+# Version Control
+.git
+.gitignore
+
+# Dependencies
+node_modules
+vendor
+
+# Build Artifacts
+dist
+bin
+whatomate
+
+# Frontend
+frontend/node_modules
+frontend/dist
+
+# Internal Dist (will be populated by builder)
+internal/frontend/dist
+
+# Environment
+.env
+.env.*
+
+# Docker
+docker-compose.yml
+docker/
+
+# IDEs
+.vscode
+.idea

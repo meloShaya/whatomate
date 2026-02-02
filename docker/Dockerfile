@@ -1,4 +1,13 @@
-# Build stage
+# Stage 1: Build Frontend
+FROM node:22-alpine AS frontend-builder
+WORKDIR /app
+COPY frontend/package*.json ./frontend/
+WORKDIR /app/frontend
+RUN npm install
+COPY frontend/ .
+RUN npm run build
+
+# Stage 2: Build Backend
 FROM golang:1.24.5-alpine AS builder
 
 WORKDIR /app
@@ -13,10 +22,17 @@ RUN go mod download
 # Copy source code
 COPY . .
 
+# Copy built frontend assets to the embedding location
+# The frontend build output is in /app/frontend/dist (from Stage 1)
+# The embedding package expects it in internal/frontend/dist
+# We need to create the directory first
+RUN mkdir -p internal/frontend/dist
+COPY --from=frontend-builder /app/frontend/dist ./internal/frontend/dist
+
 # Build the binary
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o whatomate ./cmd/whatomate
 
-# Final stage
+# Final Stage
 FROM alpine:3.19
 
 WORKDIR /app
