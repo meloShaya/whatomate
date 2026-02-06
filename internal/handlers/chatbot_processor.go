@@ -729,6 +729,23 @@ func (a *App) matchFlowTrigger(orgID uuid.UUID, accountName, messageText string)
 	return nil
 }
 
+// matchFlowByName finds a flow by its name (for cross-flow navigation)
+func (a *App) matchFlowByName(orgID uuid.UUID, flowName string) *models.ChatbotFlow {
+	flows, err := a.getChatbotFlowsCached(orgID)
+	if err != nil {
+		a.Log.Error("Failed to fetch chatbot flows for name match", "error", err)
+		return nil
+	}
+
+	flowNameLower := strings.ToLower(flowName)
+	for _, flow := range flows {
+		if strings.ToLower(flow.Name) == flowNameLower {
+			return &flow
+		}
+	}
+	return nil
+}
+
 // startFlow initiates a chatbot flow for a user
 func (a *App) startFlow(account *models.WhatsAppAccount, session *models.ChatbotSession, contact *models.Contact, flow *models.ChatbotFlow) {
 	a.Log.Info("Starting flow", "flow_id", flow.ID, "flow_name", flow.Name, "contact", contact.PhoneNumber, "num_steps", len(flow.Steps))
@@ -789,6 +806,17 @@ func (a *App) processFlowResponse(account *models.WhatsAppAccount, session *mode
 			}
 			a.logSessionMessage(session.ID, models.DirectionOutgoing, "Flow cancelled.", "flow_cancel")
 			a.exitFlow(session)
+			return
+		}
+	}
+
+	// Check for mid-flow trigger keywords (allows jumping to another flow by typing its trigger word)
+	// Only check if this is a text input (not a button click)
+	if buttonID == "" && userInput != "" {
+		targetFlow := a.matchFlowTrigger(account.OrganizationID, account.Name, userInput)
+		if targetFlow != nil && targetFlow.ID != flow.ID {
+			a.Log.Info("Mid-flow trigger detected, jumping to new flow", "current_flow", flow.Name, "target_flow", targetFlow.Name, "trigger", userInput)
+			a.startFlow(account, session, contact, targetFlow)
 			return
 		}
 	}
@@ -961,6 +989,20 @@ func (a *App) processFlowResponse(account *models.WhatsAppAccount, session *mode
 
 	// Move to next step or complete flow
 	if nextStepName == "" {
+		a.completeFlow(account, session, contact, flow)
+		return
+	}
+
+	// Check for cross-flow navigation (flow:FlowName syntax)
+	if strings.HasPrefix(nextStepName, "flow:") {
+		targetFlowName := strings.TrimPrefix(nextStepName, "flow:")
+		targetFlow := a.matchFlowByName(account.OrganizationID, targetFlowName)
+		if targetFlow != nil {
+			a.Log.Info("Cross-flow navigation triggered", "current_flow", flow.Name, "target_flow", targetFlow.Name)
+			a.startFlow(account, session, contact, targetFlow)
+			return
+		}
+		a.Log.Warn("Cross-flow target not found", "target_flow", targetFlowName)
 		a.completeFlow(account, session, contact, flow)
 		return
 	}
@@ -1220,6 +1262,11 @@ func (a *App) sendStepWithSkipCheck(account *models.WhatsAppAccount, session *mo
 	}
 
 	// Not skipping - send the step message normally
+	// Add a small delay to make it feel more natural (and simulate "typing")
+	// Skip delay if it's an API fetch or script step as those have their own latency,
+	// Unless we want to explicitly slow them down too.
+	// For now, applying to all user-facing message steps.
+	time.Sleep(3 * time.Second)
 	a.sendStepMessage(account, session, contact, step)
 
 	// If input type is "none", automatically advance to next step without waiting for user input
