@@ -12,6 +12,7 @@ import (
 	"github.com/shridarpatil/whatomate/internal/queue"
 	"github.com/shridarpatil/whatomate/internal/websocket"
 	"github.com/shridarpatil/whatomate/pkg/whatsapp"
+	"github.com/valyala/fasthttp"
 	"github.com/zerodha/fastglue"
 	"github.com/zerodha/logf"
 	"gorm.io/gorm"
@@ -62,23 +63,28 @@ func (a *App) getOrgID(r *fastglue.Request) (uuid.UUID, error) {
 		return uuid.Nil, errors.New("organization_id is not a valid UUID")
 	}
 
-	// Check if super admin is trying to switch organizations
+	// Check for X-Organization-ID header to switch organizations
 	userID, _ := r.RequestCtx.UserValue("user_id").(uuid.UUID)
-	if a.IsSuperAdmin(userID) {
-		// Check for X-Organization-ID header
-		overrideOrgID := string(r.RequestCtx.Request.Header.Peek("X-Organization-ID"))
-		if overrideOrgID != "" {
-			// Header present = super admin selected a specific org
-			parsedOrgID, err := uuid.Parse(overrideOrgID)
-			if err == nil {
-				// Verify the organization exists
+	overrideOrgID := string(r.RequestCtx.Request.Header.Peek("X-Organization-ID"))
+	if overrideOrgID != "" {
+		parsedOrgID, err := uuid.Parse(overrideOrgID)
+		if err == nil && parsedOrgID != defaultOrgID {
+			if a.IsSuperAdmin(userID) {
+				// Super admins can access any org
 				var count int64
 				if err := a.DB.Table("organizations").Where("id = ?", parsedOrgID).Count(&count).Error; err == nil && count > 0 {
 					return parsedOrgID, nil
 				}
+			} else {
+				// Non-super-admins can switch if they have membership
+				var count int64
+				if err := a.DB.Table("user_organizations").
+					Where("user_id = ? AND organization_id = ? AND deleted_at IS NULL", userID, parsedOrgID).
+					Count(&count).Error; err == nil && count > 0 {
+					return parsedOrgID, nil
+				}
 			}
 		}
-		// No header or invalid org ID - fall back to user's org
 	}
 
 	return defaultOrgID, nil
@@ -161,4 +167,53 @@ func (a *App) StopCampaignStatsSubscriber() {
 	if a.CampaignSubCancel != nil {
 		a.CampaignSubCancel()
 	}
+}
+
+// getOrgAndUserID extracts both organization ID and user ID from the request context.
+// Returns an error if either is missing or invalid.
+func (a *App) getOrgAndUserID(r *fastglue.Request) (orgID, userID uuid.UUID, err error) {
+	orgID, err = a.getOrgID(r)
+	if err != nil {
+		return uuid.Nil, uuid.Nil, err
+	}
+
+	userIDVal := r.RequestCtx.UserValue("user_id")
+	if userIDVal == nil {
+		return uuid.Nil, uuid.Nil, errors.New("user_id not found in context")
+	}
+	switch v := userIDVal.(type) {
+	case uuid.UUID:
+		userID = v
+	case string:
+		userID, err = uuid.Parse(v)
+		if err != nil {
+			return uuid.Nil, uuid.Nil, errors.New("user_id is not a valid UUID")
+		}
+	default:
+		return uuid.Nil, uuid.Nil, errors.New("user_id is not a valid UUID")
+	}
+
+	return orgID, userID, nil
+}
+
+// requirePermission checks if the user has the required permission.
+// Returns nil if permitted, otherwise sends a 403 error envelope and returns errEnvelopeSent.
+// Automatically extracts orgID from the request for org-aware permission checks.
+func (a *App) requirePermission(r *fastglue.Request, userID uuid.UUID, resource, action string) error {
+	orgID, _ := a.getOrgID(r)
+	if !a.HasPermission(userID, resource, action, orgID) {
+		_ = r.SendErrorEnvelope(fasthttp.StatusForbidden, "Insufficient permissions", nil, "")
+		return errEnvelopeSent
+	}
+	return nil
+}
+
+// decodeRequest decodes a JSON request body into the provided struct.
+// Returns nil on success, otherwise sends a 400 error envelope and returns errEnvelopeSent.
+func (a *App) decodeRequest(r *fastglue.Request, v interface{}) error {
+	if err := r.Decode(v, "json"); err != nil {
+		_ = r.SendErrorEnvelope(fasthttp.StatusBadRequest, "Invalid request body", nil, "")
+		return errEnvelopeSent
+	}
+	return nil
 }

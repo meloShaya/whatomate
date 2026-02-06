@@ -54,12 +54,10 @@ type AgentAnalyticsResponse struct {
 // GetAgentAnalytics returns agent analytics for the organization
 // Agents see only their own stats; Admin/Manager see all agents
 func (a *App) GetAgentAnalytics(r *fastglue.Request) error {
-	orgID, err := a.getOrgID(r)
+	orgID, userID, err := a.getOrgAndUserID(r)
 	if err != nil {
 		return r.SendErrorEnvelope(fasthttp.StatusUnauthorized, "Unauthorized", nil, "")
 	}
-
-	userID, _ := r.RequestCtx.UserValue("user_id").(uuid.UUID)
 
 	// Parse date range
 	fromStr := string(r.RequestCtx.QueryArgs().Peek("from"))
@@ -74,15 +72,11 @@ func (a *App) GetAgentAnalytics(r *fastglue.Request) error {
 	var periodStart, periodEnd time.Time
 
 	if fromStr != "" && toStr != "" {
-		periodStart, err = time.Parse("2006-01-02", fromStr)
-		if err != nil {
-			return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "Invalid 'from' date format. Use YYYY-MM-DD", nil, "")
+		var errMsg string
+		periodStart, periodEnd, errMsg = parseDateRange(fromStr, toStr)
+		if errMsg != "" {
+			return r.SendErrorEnvelope(fasthttp.StatusBadRequest, errMsg, nil, "")
 		}
-		periodEnd, err = time.Parse("2006-01-02", toStr)
-		if err != nil {
-			return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "Invalid 'to' date format. Use YYYY-MM-DD", nil, "")
-		}
-		periodEnd = endOfDay(periodEnd)
 	} else {
 		// Default to current month
 		periodStart = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
@@ -98,7 +92,7 @@ func (a *App) GetAgentAnalytics(r *fastglue.Request) error {
 
 	// Check if filtering by specific agent (requires analytics permission)
 	var filterAgentID *uuid.UUID
-	if a.HasPermission(userID, models.ResourceAnalytics, models.ActionRead) && agentIDStr != "" {
+	if a.HasPermission(userID, models.ResourceAnalytics, models.ActionRead, orgID) && agentIDStr != "" {
 		parsedID, err := uuid.Parse(agentIDStr)
 		if err == nil {
 			filterAgentID = &parsedID
@@ -112,7 +106,7 @@ func (a *App) GetAgentAnalytics(r *fastglue.Request) error {
 		response.TrendData = a.calculateTrendData(orgID, periodStart, periodEnd, groupBy, filterAgentID)
 		// Calculate summary for this specific agent
 		a.calculateAgentSummaryStats(orgID, *filterAgentID, periodStart, periodEnd, &response.Summary)
-	} else if !a.HasPermission(userID, models.ResourceAnalytics, models.ActionRead) {
+	} else if !a.HasPermission(userID, models.ResourceAnalytics, models.ActionRead, orgID) {
 		// Users without analytics permission only see their own stats
 		myStats := a.calculateAgentStats(orgID, userID, periodStart, periodEnd)
 		response.MyStats = &myStats
@@ -133,20 +127,18 @@ func (a *App) GetAgentAnalytics(r *fastglue.Request) error {
 
 // GetAgentDetails returns detailed analytics for a specific agent
 func (a *App) GetAgentDetails(r *fastglue.Request) error {
-	orgID, err := a.getOrgID(r)
+	orgID, userID, err := a.getOrgAndUserID(r)
 	if err != nil {
 		return r.SendErrorEnvelope(fasthttp.StatusUnauthorized, "Unauthorized", nil, "")
 	}
 
-	userID, _ := r.RequestCtx.UserValue("user_id").(uuid.UUID)
-	if !a.HasPermission(userID, models.ResourceAnalytics, models.ActionRead) {
-		return r.SendErrorEnvelope(fasthttp.StatusForbidden, "Access denied", nil, "")
+	if err := a.requirePermission(r, userID, models.ResourceAnalytics, models.ActionRead); err != nil {
+		return nil
 	}
 
-	agentIDStr := r.RequestCtx.UserValue("id").(string)
-	agentID, err := uuid.Parse(agentIDStr)
+	agentID, err := parsePathUUID(r, "id", "agent")
 	if err != nil {
-		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "Invalid agent ID", nil, "")
+		return nil
 	}
 
 	// Parse date range
@@ -161,9 +153,13 @@ func (a *App) GetAgentDetails(r *fastglue.Request) error {
 	var periodStart, periodEnd time.Time
 
 	if fromStr != "" && toStr != "" {
-		periodStart, _ = time.Parse("2006-01-02", fromStr)
-		periodEnd, _ = time.Parse("2006-01-02", toStr)
-		periodEnd = endOfDay(periodEnd)
+		var errMsg string
+		periodStart, periodEnd, errMsg = parseDateRange(fromStr, toStr)
+		if errMsg != "" {
+			// Fall back to current month on parse error
+			periodStart = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+			periodEnd = now
+		}
 	} else {
 		periodStart = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 		periodEnd = now
@@ -186,13 +182,12 @@ func (a *App) GetAgentDetails(r *fastglue.Request) error {
 
 // GetAgentComparison returns comparison data for multiple agents
 func (a *App) GetAgentComparison(r *fastglue.Request) error {
-	orgID, err := a.getOrgID(r)
+	orgID, userID, err := a.getOrgAndUserID(r)
 	if err != nil {
 		return r.SendErrorEnvelope(fasthttp.StatusUnauthorized, "Unauthorized", nil, "")
 	}
 
-	userID, _ := r.RequestCtx.UserValue("user_id").(uuid.UUID)
-	if !a.HasPermission(userID, models.ResourceAnalytics, models.ActionRead) {
+	if !a.HasPermission(userID, models.ResourceAnalytics, models.ActionRead, orgID) {
 		return r.SendErrorEnvelope(fasthttp.StatusForbidden, "Access denied", nil, "")
 	}
 
@@ -204,9 +199,13 @@ func (a *App) GetAgentComparison(r *fastglue.Request) error {
 	var periodStart, periodEnd time.Time
 
 	if fromStr != "" && toStr != "" {
-		periodStart, _ = time.Parse("2006-01-02", fromStr)
-		periodEnd, _ = time.Parse("2006-01-02", toStr)
-		periodEnd = endOfDay(periodEnd)
+		var errMsg string
+		periodStart, periodEnd, errMsg = parseDateRange(fromStr, toStr)
+		if errMsg != "" {
+			// Fall back to current month on parse error
+			periodStart = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+			periodEnd = now
+		}
 	} else {
 		periodStart = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 		periodEnd = now

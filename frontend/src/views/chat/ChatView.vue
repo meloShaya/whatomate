@@ -1,12 +1,16 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, nextTick, computed, defineAsyncComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { useContactsStore, type Contact, type Message } from '@/stores/contacts'
 import { useAuthStore } from '@/stores/auth'
 import { useUsersStore } from '@/stores/users'
 import { useTransfersStore } from '@/stores/transfers'
 import { wsService } from '@/services/websocket'
 import { contactsService, chatbotService, messagesService, customActionsService, type CustomAction, type ActionResult } from '@/services/api'
+import { useTagsStore } from '@/stores/tags'
+import { TagBadge } from '@/components/ui/tag-badge'
+import { getTagColorClass } from '@/lib/constants'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -78,12 +82,15 @@ import {
   Mail,
   Globe,
   Code,
-  RotateCw
+  RotateCw,
+  Filter
 } from 'lucide-vue-next'
 import { getInitials } from '@/lib/utils'
 import { useColorMode } from '@/composables/useColorMode'
+import { useInfiniteScroll } from '@/composables/useInfiniteScroll'
 import CannedResponsePicker from '@/components/chat/CannedResponsePicker.vue'
 import ContactInfoPanel from '@/components/chat/ContactInfoPanel.vue'
+import { CreateContactDialog } from '@/components/shared'
 import { Info } from 'lucide-vue-next'
 
 // Avatar gradient colors - consistent per contact based on name hash
@@ -109,17 +116,20 @@ function getAvatarGradient(name: string): string {
   return avatarGradients[Math.abs(hash) % avatarGradients.length]
 }
 
+const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const contactsStore = useContactsStore()
 const authStore = useAuthStore()
 const usersStore = useUsersStore()
 const transfersStore = useTransfersStore()
+const tagsStore = useTagsStore()
 const { isDark } = useColorMode()
+
+const canWriteContacts = authStore.hasPermission('contacts', 'write')
 
 const messageInput = ref('')
 const messagesEndRef = ref<HTMLElement | null>(null)
-const messagesScrollAreaRef = ref<InstanceType<typeof ScrollArea> | null>(null)
 const messageInputRef = ref<HTMLTextAreaElement | null>(null)
 const isSending = ref(false)
 const isAssignDialogOpen = ref(false)
@@ -155,6 +165,53 @@ const emojiPickerOpen = ref(false)
 // Custom actions state
 const customActions = ref<CustomAction[]>([])
 const executingActionId = ref<string | null>(null)
+
+// Tags filter state
+const isTagFilterOpen = ref(false)
+
+// Add contact dialog state
+const isAddContactOpen = ref(false)
+
+function openAddContactDialog() {
+  isAddContactOpen.value = true
+}
+
+async function onContactCreated(contact: any) {
+  // Refresh contacts and select the new one
+  await contactsStore.fetchContacts()
+  if (contact?.id) {
+    router.push({ name: 'chat-conversation', params: { contactId: contact.id } })
+  }
+}
+
+// Infinite scroll for contacts (load more at bottom)
+const contactsScroll = useInfiniteScroll({
+  direction: 'bottom',
+  onLoadMore: () => contactsStore.loadMoreContacts(),
+  hasMore: computed(() => contactsStore.hasMoreContacts),
+  isLoading: computed(() => contactsStore.isLoadingMoreContacts)
+})
+
+// Infinite scroll for messages (load older at top)
+const messagesScroll = useInfiniteScroll({
+  direction: 'top',
+  onLoadMore: async () => {
+    if (!contactsStore.currentContact) return
+    await messagesScroll.preserveScrollPosition(async () => {
+      await contactsStore.fetchOlderMessages(contactsStore.currentContact!.id)
+      await nextTick()
+      // Load media for any new messages
+      try {
+        loadMediaForMessages()
+      } catch (e) {
+        console.error('Error loading media:', e)
+      }
+    })
+  },
+  hasMore: computed(() => contactsStore.hasMoreMessages),
+  isLoading: computed(() => contactsStore.isLoadingOlderMessages),
+  onScroll: (event) => updateStickyDate(event.target as HTMLElement)
+})
 
 const contactId = computed(() => route.params.contactId as string | undefined)
 
@@ -219,6 +276,22 @@ async function fetchCustomActions() {
   }
 }
 
+function toggleTagFilter(tagName: string) {
+  const index = contactsStore.selectedTags.indexOf(tagName)
+  if (index === -1) {
+    contactsStore.selectedTags.push(tagName)
+  } else {
+    contactsStore.selectedTags.splice(index, 1)
+  }
+  // Refetch contacts with new filter
+  contactsStore.fetchContacts()
+}
+
+function clearTagFilter() {
+  contactsStore.selectedTags = []
+  contactsStore.fetchContacts()
+}
+
 async function executeCustomAction(action: CustomAction) {
   if (!contactsStore.currentContact || executingActionId.value) return
 
@@ -246,7 +319,7 @@ async function executeCustomAction(action: CustomAction) {
         }
       } catch (jsError: any) {
         console.error('JavaScript action error:', jsError)
-        toast.error('JavaScript error: ' + jsError.message)
+        toast.error(t('chat.jsError') + ': ' + jsError.message)
         return
       }
     }
@@ -265,7 +338,7 @@ async function executeCustomAction(action: CustomAction) {
     if (result.clipboard) {
       // Copy to clipboard
       await navigator.clipboard.writeText(result.clipboard)
-      toast.success('Copied to clipboard')
+      toast.success(t('common.copiedToClipboard'))
     }
 
     if (result.toast) {
@@ -279,9 +352,9 @@ async function executeCustomAction(action: CustomAction) {
       }
     } else if (result.success && !result.redirect_url && !result.clipboard) {
       // Default success message
-      toast.success(result.message || 'Action executed successfully')
+      toast.success(result.message || t('chat.actionExecuted'))
     } else if (!result.success) {
-      toast.error(result.message || 'Action failed')
+      toast.error(result.message || t('chat.actionFailed'))
     }
   } catch (error: any) {
     const message = error.response?.data?.message || 'Failed to execute action'
@@ -313,6 +386,10 @@ onMounted(async () => {
 
   await contactsStore.fetchContacts()
 
+  // Setup infinite scroll for contacts list
+  await nextTick()
+  contactsScroll.setup()
+
   // Fetch transfers to track active transfers
   transfersStore.fetchTransfers({ status: 'active' })
 
@@ -326,6 +403,11 @@ onMounted(async () => {
   // Fetch custom actions for admins/managers
   if (canAssignContacts.value) {
     fetchCustomActions()
+  }
+
+  // Fetch available tags for filtering (if not already loaded)
+  if (tagsStore.tags.length === 0) {
+    tagsStore.fetchTags().catch(() => {})
   }
 
   if (contactId.value) {
@@ -342,75 +424,9 @@ onUnmounted(() => {
     URL.revokeObjectURL(url)
   })
   mediaBlobUrls.value = {}
-  // Remove scroll listener
-  removeScrollListener()
   // Clear sticky date timeout
   if (stickyDateTimeout) clearTimeout(stickyDateTimeout)
 })
-
-// Infinite scroll for loading older messages
-let scrollViewport: HTMLElement | null = null
-
-function setupScrollListener() {
-  // Get the viewport element from ScrollArea
-  const scrollArea = messagesScrollAreaRef.value?.$el
-  if (scrollArea) {
-    // Find the scrollable viewport - it's the element with overflow:scroll/auto
-    // Try data attributes first, then find by computed style
-    scrollViewport = scrollArea.querySelector('[data-reka-scroll-area-viewport]') ||
-                     scrollArea.querySelector('[data-radix-scroll-area-viewport]')
-
-    if (!scrollViewport) {
-      // Fallback: find child element that has overflow scroll/auto
-      const children = scrollArea.querySelectorAll('*')
-      for (const child of children) {
-        const style = window.getComputedStyle(child)
-        if (style.overflowY === 'scroll' || style.overflowY === 'auto') {
-          scrollViewport = child as HTMLElement
-          break
-        }
-      }
-    }
-
-    if (scrollViewport) {
-      scrollViewport.addEventListener('scroll', handleScroll)
-    }
-  }
-}
-
-function removeScrollListener() {
-  if (scrollViewport) {
-    scrollViewport.removeEventListener('scroll', handleScroll)
-    scrollViewport = null
-  }
-}
-
-async function handleScroll(event: Event) {
-  const target = event.target as HTMLElement
-
-  // Update sticky date header
-  updateStickyDate(target)
-
-  // Trigger load when scrolled near top (within 100px)
-  if (target.scrollTop < 100 && contactsStore.hasMoreMessages && !contactsStore.isLoadingOlderMessages) {
-    const currentScrollHeight = target.scrollHeight
-    const currentScrollTop = target.scrollTop
-
-    await contactsStore.fetchOlderMessages(contactsStore.currentContact!.id)
-
-    // Preserve scroll position after prepending messages
-    await nextTick()
-    const newScrollHeight = target.scrollHeight
-    target.scrollTop = newScrollHeight - currentScrollHeight + currentScrollTop
-
-    // Load media for any new messages
-    try {
-      loadMediaForMessages()
-    } catch (e) {
-      console.error('Error loading media:', e)
-    }
-  }
-}
 
 function updateStickyDate(scrollContainer: HTMLElement) {
   // Find all date separator elements
@@ -461,7 +477,7 @@ async function selectContact(id: string) {
   const contact = contactsStore.contacts.find(c => c.id === id)
   if (contact) {
     // Remove old scroll listener before switching contacts
-    removeScrollListener()
+    messagesScroll.cleanup()
 
     contactsStore.setCurrentContact(contact)
     await contactsStore.fetchMessages(id)
@@ -479,7 +495,7 @@ async function selectContact(id: string) {
     setTimeout(() => {
       scrollToBottom(true)
       // Setup scroll listener for infinite scroll after initial scroll
-      setupScrollListener()
+      messagesScroll.setup()
     }, 50)
 
     // Fetch session data and auto-open panel if configured
@@ -535,7 +551,7 @@ async function sendMessage() {
     await nextTick()
     scrollToBottom()
   } catch (error) {
-    toast.error('Failed to send message')
+    toast.error(t('chat.sendMessageFailed'))
   } finally {
     isSending.value = false
   }
@@ -566,9 +582,9 @@ async function retryMessage(message: Message) {
       }
     }
 
-    toast.success('Message sent successfully')
+    toast.success(t('chat.messageSent'))
   } catch (error) {
-    toast.error('Failed to retry message')
+    toast.error(t('chat.sendMessageFailed'))
   } finally {
     retryingMessageId.value = null
   }
@@ -659,7 +675,7 @@ async function sendReaction(messageId: string, emoji: string) {
     const data = response.data.data || response.data
     contactsStore.updateMessageReactions(messageId, data.reactions)
   } catch (error) {
-    toast.error('Failed to send reaction')
+    toast.error(t('chat.reactionFailed'))
   }
   reactionPickerMessageId.value = null
 }
@@ -698,7 +714,7 @@ async function assignContactToUser(userId: string | null) {
 
   try {
     await contactsService.assign(contactsStore.currentContact.id, userId)
-    toast.success(userId ? 'Contact assigned successfully' : 'Contact unassigned')
+    toast.success(userId ? t('chat.contactAssigned') : t('chat.contactUnassigned'))
     // Update current contact with new assignment
     contactsStore.currentContact = {
       ...contactsStore.currentContact,
@@ -707,7 +723,7 @@ async function assignContactToUser(userId: string | null) {
     // Refresh contacts list
     await contactsStore.fetchContacts()
   } catch (error: any) {
-    const message = error.response?.data?.message || 'Failed to assign contact'
+    const message = error.response?.data?.message || t('chat.assignFailed')
     toast.error(message)
   }
 }
@@ -722,13 +738,13 @@ async function transferToAgent() {
       whatsapp_account: (contactsStore.currentContact as any).whatsapp_account,
       source: 'manual'
     })
-    toast.success('Contact transferred to agent queue', {
-      description: 'Chatbot is now paused for this contact'
+    toast.success(t('chat.transferSuccess'), {
+      description: t('chat.transferSuccessDesc')
     })
     // Refresh transfers store (WebSocket will also update, but this ensures immediate sync)
     await transfersStore.fetchTransfers({ status: 'active' })
   } catch (error: any) {
-    const message = error.response?.data?.message || 'Failed to transfer contact'
+    const message = error.response?.data?.message || t('chat.transferFailed')
     toast.error(message)
   } finally {
     isTransferring.value = false
@@ -742,8 +758,8 @@ async function resumeChatbot() {
   isResuming.value = true
   try {
     await chatbotService.resumeTransfer(activeTransferId.value)
-    toast.success('Chatbot resumed', {
-      description: 'The contact will now receive automated responses'
+    toast.success(t('chat.resumeSuccess'), {
+      description: t('chat.resumeSuccessDesc')
     })
     // Refresh transfers store to update UI
     await transfersStore.fetchTransfers({ status: 'active' })
@@ -761,7 +777,7 @@ async function resumeChatbot() {
       }
     }
   } catch (error: any) {
-    const message = error.response?.data?.message || 'Failed to resume chatbot'
+    const message = error.response?.data?.message || t('chat.resumeFailed')
     toast.error(message)
   } finally {
     isResuming.value = false
@@ -1070,8 +1086,8 @@ function handleFileSelect(event: Event) {
   const allowedTypes = ['image/', 'video/', 'audio/', 'application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument']
   const isAllowed = allowedTypes.some(type => file.type.startsWith(type))
   if (!isAllowed) {
-    toast.error('Unsupported file type', {
-      description: 'Please select an image, video, audio, or document file'
+    toast.error(t('chat.unsupportedFileType'), {
+      description: t('chat.unsupportedFileTypeDesc')
     })
     return
   }
@@ -1079,8 +1095,8 @@ function handleFileSelect(event: Event) {
   // Validate file size (16MB limit for WhatsApp)
   const maxSize = 16 * 1024 * 1024
   if (file.size > maxSize) {
-    toast.error('File too large', {
-      description: 'Maximum file size is 16MB'
+    toast.error(t('chat.fileTooLarge'), {
+      description: t('chat.fileTooLargeDesc')
     })
     return
   }
@@ -1133,7 +1149,7 @@ async function sendMediaMessage() {
 
     const token = authStore.token
     if (!token) {
-      toast.error('Authentication required')
+      toast.error(t('errors.unauthorized'))
       return
     }
 
@@ -1164,11 +1180,11 @@ async function sendMediaMessage() {
       }
     }
 
-    toast.success('Media sent successfully')
+    toast.success(t('chat.mediaSent'))
     closeMediaDialog()
   } catch (error: any) {
-    toast.error('Failed to send media', {
-      description: error.message || 'Please try again'
+    toast.error(t('chat.mediaFailed'), {
+      description: error.message || t('chat.mediaFailedDesc')
     })
   } finally {
     isUploadingMedia.value = false
@@ -1182,18 +1198,99 @@ async function sendMediaMessage() {
     <div class="w-80 border-r border-white/[0.08] light:border-gray-200 flex flex-col bg-[#0a0a0b] light:bg-white">
       <!-- Search Header -->
       <div class="p-2 border-b border-white/[0.08] light:border-gray-200">
-        <div class="relative">
-          <Search class="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-white/40 light:text-gray-400" />
-          <Input
-            v-model="contactsStore.searchQuery"
-            placeholder="Search contacts..."
-            class="pl-8 h-8 text-sm bg-white/[0.04] border-white/[0.1] text-white placeholder:text-white/40 light:bg-gray-50 light:border-gray-200 light:text-gray-900 light:placeholder:text-gray-400"
-          />
+        <div class="flex items-center gap-2">
+          <div class="relative flex-1">
+            <Search class="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-white/40 light:text-gray-400" />
+            <Input
+              v-model="contactsStore.searchQuery"
+              :placeholder="$t('chat.searchContacts') + '...'"
+              class="pl-8 h-8 text-sm bg-white/[0.04] border-white/[0.1] text-white placeholder:text-white/40 light:bg-gray-50 light:border-gray-200 light:text-gray-900 light:placeholder:text-gray-400"
+            />
+          </div>
+          <!-- Add Contact -->
+          <Tooltip v-if="canWriteContacts">
+            <TooltipTrigger as-child>
+              <Button
+                variant="ghost"
+                size="icon"
+                class="h-8 w-8 shrink-0 text-white/40 hover:text-white hover:bg-white/[0.08] light:text-gray-500 light:hover:text-gray-900 light:hover:bg-gray-100"
+                @click="openAddContactDialog"
+              >
+                <UserPlus class="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{{ $t('chat.addContact') }}</TooltipContent>
+          </Tooltip>
+          <!-- Tag Filter -->
+          <Popover v-model:open="isTagFilterOpen">
+            <PopoverTrigger as-child>
+              <Button
+                variant="ghost"
+                size="icon"
+                class="h-8 w-8 shrink-0 relative"
+                :class="contactsStore.selectedTags.length > 0 ? 'text-emerald-400 bg-emerald-500/10' : 'text-white/40 hover:text-white hover:bg-white/[0.08] light:text-gray-500 light:hover:text-gray-900 light:hover:bg-gray-100'"
+              >
+                <Filter class="h-4 w-4" />
+                <span v-if="contactsStore.selectedTags.length > 0" class="absolute -top-1 -right-1 h-4 w-4 rounded-full bg-emerald-500 text-[10px] text-white flex items-center justify-center">
+                  {{ contactsStore.selectedTags.length }}
+                </span>
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="end" class="w-56 p-2">
+              <div class="space-y-2">
+                <div class="flex items-center justify-between px-1">
+                  <span class="text-sm font-medium">{{ $t('chat.filterByTags') }}</span>
+                  <Button
+                    v-if="contactsStore.selectedTags.length > 0"
+                    variant="ghost"
+                    size="sm"
+                    class="h-6 px-2 text-xs"
+                    @click="clearTagFilter"
+                  >
+                    Clear
+                  </Button>
+                </div>
+                <Separator />
+                <div v-if="tagsStore.tags.length === 0" class="py-2 text-center text-sm text-muted-foreground">
+                  {{ $t('chat.noTagsAvailable') }}
+                </div>
+                <div v-else class="space-y-1 max-h-48 overflow-y-auto">
+                  <button
+                    v-for="tag in tagsStore.tags"
+                    :key="tag.name"
+                    class="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm hover:bg-white/[0.08] light:hover:bg-gray-100 transition-colors"
+                    :class="contactsStore.selectedTags.includes(tag.name) && 'bg-white/[0.08] light:bg-gray-100'"
+                    @click="toggleTagFilter(tag.name)"
+                  >
+                    <span :class="['w-2 h-2 rounded-full shrink-0', getTagColorClass(tag.color).split(' ')[0]]" />
+                    <span class="flex-1 text-left truncate">{{ tag.name }}</span>
+                    <Check
+                      v-if="contactsStore.selectedTags.includes(tag.name)"
+                      class="h-4 w-4 text-emerald-400 shrink-0"
+                    />
+                  </button>
+                </div>
+              </div>
+            </PopoverContent>
+          </Popover>
+        </div>
+        <!-- Active tag filters -->
+        <div v-if="contactsStore.selectedTags.length > 0" class="flex flex-wrap gap-1 mt-2">
+          <TagBadge
+            v-for="tagName in contactsStore.selectedTags"
+            :key="tagName"
+            :color="tagsStore.getTagByName(tagName)?.color"
+            class="cursor-pointer hover:opacity-80"
+            @click="toggleTagFilter(tagName)"
+          >
+            {{ tagName }}
+            <X class="h-3 w-3 ml-1" />
+          </TagBadge>
         </div>
       </div>
 
       <!-- Contacts -->
-      <ScrollArea class="flex-1">
+      <ScrollArea :ref="(el: any) => contactsScroll.scrollAreaRef.value = el" class="flex-1">
         <div class="py-1">
           <div
             v-for="contact in contactsStore.sortedContacts"
@@ -1230,23 +1327,14 @@ async function sendMediaMessage() {
             </div>
           </div>
 
-          <!-- Load more indicator -->
-          <div v-if="contactsStore.hasMoreContacts" class="p-3 text-center">
-            <Button
-              v-if="!contactsStore.isLoadingMoreContacts"
-              variant="ghost"
-              size="sm"
-              class="text-white/50 hover:text-white hover:bg-white/[0.04] light:text-gray-500 light:hover:text-gray-900 light:hover:bg-gray-100"
-              @click="contactsStore.loadMoreContacts()"
-            >
-              Load more ({{ contactsStore.sortedContacts.length }} of {{ contactsStore.contactsTotal }})
-            </Button>
-            <Loader2 v-else class="h-5 w-5 mx-auto animate-spin text-white/40 light:text-gray-400" />
+          <!-- Loading indicator for infinite scroll -->
+          <div v-if="contactsStore.isLoadingMoreContacts" class="p-3 text-center">
+            <Loader2 class="h-5 w-5 mx-auto animate-spin text-white/40 light:text-gray-400" />
           </div>
 
           <div v-if="contactsStore.sortedContacts.length === 0" class="p-3 text-center text-white/40 light:text-gray-500">
             <User class="h-6 w-6 mx-auto mb-1.5 opacity-50" />
-            <p class="text-sm">No contacts found</p>
+            <p class="text-sm">{{ $t('chat.noContacts') }}</p>
           </div>
         </div>
       </ScrollArea>
@@ -1263,8 +1351,8 @@ async function sendMediaMessage() {
           <div class="h-16 w-16 rounded-2xl bg-gradient-to-br from-emerald-500 to-green-600 flex items-center justify-center mx-auto mb-4 shadow-lg shadow-emerald-500/20">
             <Send class="h-8 w-8 text-white" />
           </div>
-          <h3 class="font-medium text-lg mb-1 text-white light:text-gray-900">Select a conversation</h3>
-          <p class="text-sm text-white/50 light:text-gray-500">Choose a contact to start chatting</p>
+          <h3 class="font-medium text-lg mb-1 text-white light:text-gray-900">{{ $t('chat.selectConversation') }}</h3>
+          <p class="text-sm text-white/50 light:text-gray-500">{{ $t('chat.chooseContact') }}</p>
         </div>
       </div>
 
@@ -1300,7 +1388,7 @@ async function sendMediaMessage() {
                   <UserPlus class="h-4 w-4" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>Assign to agent</TooltipContent>
+              <TooltipContent>{{ $t('chat.assignToAgent') }}</TooltipContent>
             </Tooltip>
             <Tooltip v-if="activeTransferId">
               <TooltipTrigger as-child>
@@ -1308,7 +1396,7 @@ async function sendMediaMessage() {
                   <Play class="h-4 w-4" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>Resume Chatbot</TooltipContent>
+              <TooltipContent>{{ $t('chat.resumeChatbot') }}</TooltipContent>
             </Tooltip>
             <!-- Custom Action Buttons -->
             <Tooltip v-for="action in customActions" :key="action.id">
@@ -1338,7 +1426,7 @@ async function sendMediaMessage() {
                   <Info class="h-4 w-4" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>Contact Info</TooltipContent>
+              <TooltipContent>{{ $t('chat.contactInfo') }}</TooltipContent>
             </Tooltip>
             <DropdownMenu>
               <DropdownMenuTrigger as-child>
@@ -1347,23 +1435,23 @@ async function sendMediaMessage() {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuLabel>Contact Options</DropdownMenuLabel>
+                <DropdownMenuLabel>{{ $t('chat.contactOptions') }}</DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem v-if="canAssignContacts" @click="isAssignDialogOpen = true">
                   <UserPlus class="mr-2 h-4 w-4" />
-                  <span>Assign to agent</span>
+                  <span>{{ $t('chat.assignToAgent') }}</span>
                 </DropdownMenuItem>
                 <DropdownMenuItem v-if="!activeTransferId" @click="transferToAgent" :disabled="isTransferring">
                   <UserX class="mr-2 h-4 w-4" />
-                  <span>Transfer to Agent</span>
+                  <span>{{ $t('chat.transferToAgent') }}</span>
                 </DropdownMenuItem>
                 <DropdownMenuItem v-if="activeTransferId" @click="resumeChatbot" :disabled="isResuming">
                   <Play class="mr-2 h-4 w-4" />
-                  <span>Resume Chatbot</span>
+                  <span>{{ $t('chat.resumeChatbot') }}</span>
                 </DropdownMenuItem>
                 <DropdownMenuItem @click="isInfoPanelOpen = !isInfoPanelOpen">
                   <Info class="mr-2 h-4 w-4" />
-                  <span>{{ isInfoPanelOpen ? 'Hide contact details' : 'View contact details' }}</span>
+                  <span>{{ isInfoPanelOpen ? $t('chat.hideContactDetails') : $t('chat.viewContactDetails') }}</span>
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -1382,13 +1470,13 @@ async function sendMediaMessage() {
             </div>
           </Transition>
 
-          <ScrollArea ref="messagesScrollAreaRef" class="h-full p-3 chat-background">
+          <ScrollArea :ref="(el: any) => messagesScroll.scrollAreaRef.value = el" class="h-full p-3 chat-background">
             <div class="space-y-2">
               <!-- Loading indicator for older messages -->
               <div v-if="contactsStore.isLoadingOlderMessages" class="flex justify-center py-2">
                 <div class="flex items-center gap-2 text-white/40 light:text-gray-500 text-sm">
                   <div class="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                  <span>Loading older messages...</span>
+                  <span>{{ $t('chat.loadingOlderMessages') }}...</span>
                 </div>
               </div>
               <template
@@ -1436,7 +1524,7 @@ async function sendMediaMessage() {
                 <!-- Image message -->
                 <div v-if="message.message_type === 'image' && message.media_url" class="mb-2">
                   <div v-if="isMediaLoading(message)" class="w-[200px] h-[150px] bg-muted rounded-lg animate-pulse flex items-center justify-center">
-                    <span class="text-muted-foreground text-sm">Loading...</span>
+                    <span class="text-muted-foreground text-sm">{{ $t('common.loading') }}...</span>
                   </div>
                   <img
                     v-else-if="getMediaBlobUrl(message)"
@@ -1453,7 +1541,7 @@ async function sendMediaMessage() {
                 <!-- Sticker message -->
                 <div v-else-if="message.message_type === 'sticker' && message.media_url" class="mb-2">
                   <div v-if="isMediaLoading(message)" class="w-[128px] h-[128px] bg-muted rounded-lg animate-pulse flex items-center justify-center">
-                    <span class="text-muted-foreground text-sm">Loading...</span>
+                    <span class="text-muted-foreground text-sm">{{ $t('common.loading') }}...</span>
                   </div>
                   <img
                     v-else-if="getMediaBlobUrl(message)"
@@ -1470,7 +1558,7 @@ async function sendMediaMessage() {
                 <!-- Video message -->
                 <div v-else-if="message.message_type === 'video' && message.media_url" class="mb-2">
                   <div v-if="isMediaLoading(message)" class="w-[200px] h-[150px] bg-muted rounded-lg animate-pulse flex items-center justify-center">
-                    <span class="text-muted-foreground text-sm">Loading...</span>
+                    <span class="text-muted-foreground text-sm">{{ $t('common.loading') }}...</span>
                   </div>
                   <video
                     v-else-if="getMediaBlobUrl(message)"
@@ -1510,7 +1598,7 @@ async function sendMediaMessage() {
                   </a>
                   <div v-else-if="isMediaLoading(message)" class="flex items-center gap-2 px-3 py-2 bg-background/50 rounded-lg">
                     <FileText class="h-5 w-5 text-muted-foreground" />
-                    <span class="text-sm text-muted-foreground">Loading...</span>
+                    <span class="text-sm text-muted-foreground">{{ $t('common.loading') }}...</span>
                   </div>
                   <div v-else class="flex items-center gap-2 px-3 py-2 bg-background/50 rounded-lg">
                     <FileText class="h-5 w-5 text-muted-foreground" />
@@ -1770,7 +1858,7 @@ async function sendMediaMessage() {
                   </Popover>
                 </span>
               </TooltipTrigger>
-              <TooltipContent>Emoji</TooltipContent>
+              <TooltipContent>{{ $t('chat.emoji') }}</TooltipContent>
             </Tooltip>
             <Tooltip>
               <TooltipTrigger as-child>
@@ -1784,7 +1872,7 @@ async function sendMediaMessage() {
                   />
                 </span>
               </TooltipTrigger>
-              <TooltipContent>Canned Responses</TooltipContent>
+              <TooltipContent>{{ $t('chat.cannedResponses') }}</TooltipContent>
             </Tooltip>
             <Tooltip>
               <TooltipTrigger as-child>
@@ -1792,7 +1880,7 @@ async function sendMediaMessage() {
                   <Paperclip class="w-[18px] h-[18px] text-white/40 light:text-gray-500" />
                 </button>
               </TooltipTrigger>
-              <TooltipContent>Attach file</TooltipContent>
+              <TooltipContent>{{ $t('chat.attachFile') }}</TooltipContent>
             </Tooltip>
             <input
               ref="fileInputRef"
@@ -1804,7 +1892,7 @@ async function sendMediaMessage() {
             <textarea
               ref="messageInputRef"
               v-model="messageInput"
-              placeholder="Type a message..."
+              :placeholder="$t('chat.typeMessage') + '...'"
               rows="1"
               class="flex-1 bg-transparent text-[14px] text-white light:text-gray-900 placeholder:text-white/30 light:placeholder:text-gray-400 focus:outline-none resize-none min-h-[36px] max-h-[120px] py-2 overflow-y-auto"
               @keydown.enter.exact.prevent="sendMessage"
@@ -1824,15 +1912,16 @@ async function sendMediaMessage() {
       :contact="contactsStore.currentContact"
       :session-data="contactSessionData"
       @close="isInfoPanelOpen = false"
+      @tags-updated="(tags) => contactsStore.updateContactTags(contactsStore.currentContact!.id, tags)"
     />
 
     <!-- Assign Contact Dialog -->
     <Dialog v-model:open="isAssignDialogOpen" @update:open="(open) => !open && (assignSearchQuery = '')">
       <DialogContent class="max-w-sm">
         <DialogHeader>
-          <DialogTitle>Assign Contact</DialogTitle>
+          <DialogTitle>{{ $t('chat.assignContact') }}</DialogTitle>
           <DialogDescription>
-            Select a team member to assign this contact to.
+            {{ $t('chat.assignContactDesc') }}
           </DialogDescription>
         </DialogHeader>
         <div class="py-4 space-y-3">
@@ -1841,7 +1930,7 @@ async function sendMediaMessage() {
             <Search class="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input
               v-model="assignSearchQuery"
-              placeholder="Search users..."
+              :placeholder="$t('chat.searchUsers') + '...'"
               class="pl-9 h-9"
             />
           </div>
@@ -1852,7 +1941,7 @@ async function sendMediaMessage() {
             @click="assignContactToUser(null); isAssignDialogOpen = false"
           >
             <UserMinus class="mr-2 h-4 w-4" />
-            Unassign
+            {{ $t('chat.unassignContact') }}
           </Button>
           <Separator />
           <ScrollArea class="max-h-[280px]">
@@ -1875,7 +1964,7 @@ async function sendMediaMessage() {
                 </Badge>
               </Button>
               <p v-if="filteredAssignableUsers.length === 0" class="text-sm text-muted-foreground text-center py-4">
-                No users found
+                {{ $t('chat.noUsersFound') }}
               </p>
             </div>
           </ScrollArea>
@@ -1887,7 +1976,7 @@ async function sendMediaMessage() {
     <Dialog v-model:open="isMediaDialogOpen">
       <DialogContent class="max-w-md">
         <DialogHeader>
-          <DialogTitle>Send Media</DialogTitle>
+          <DialogTitle>{{ $t('chat.sendMedia') }}</DialogTitle>
           <DialogDescription>
             {{ selectedFile?.name }}
           </DialogDescription>
@@ -1917,7 +2006,7 @@ async function sendMediaMessage() {
               </div>
               <div>
                 <p class="font-medium text-sm">{{ selectedFile.name }}</p>
-                <p class="text-xs text-muted-foreground">Audio file</p>
+                <p class="text-xs text-muted-foreground">{{ $t('chat.audioFile') }}</p>
               </div>
             </div>
           </div>
@@ -1940,7 +2029,7 @@ async function sendMediaMessage() {
           <div v-if="selectedFile && !selectedFile.type.startsWith('audio/')">
             <Textarea
               v-model="mediaCaption"
-              placeholder="Add a caption..."
+              :placeholder="$t('chat.mediaCaption') + '...'"
               class="min-h-[60px] max-h-[100px] resize-none"
               :rows="2"
             />
@@ -1949,17 +2038,20 @@ async function sendMediaMessage() {
           <!-- Actions -->
           <div class="flex justify-end gap-2">
             <Button variant="outline" @click="closeMediaDialog" :disabled="isUploadingMedia">
-              Cancel
+              {{ $t('common.cancel') }}
             </Button>
             <Button @click="sendMediaMessage" :disabled="isUploadingMedia">
               <Send v-if="!isUploadingMedia" class="mr-2 h-4 w-4" />
-              <span v-if="isUploadingMedia">Sending...</span>
-              <span v-else>Send</span>
+              <span v-if="isUploadingMedia">{{ $t('chat.sending') }}...</span>
+              <span v-else>{{ $t('chat.send') }}</span>
             </Button>
           </div>
         </div>
       </DialogContent>
     </Dialog>
+
+    <!-- Add Contact Dialog -->
+    <CreateContactDialog v-model:open="isAddContactOpen" @created="onContactCreated" />
   </div>
 </template>
 

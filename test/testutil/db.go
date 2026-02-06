@@ -84,6 +84,7 @@ func runMigrations(db *gorm.DB) error {
 		&models.Permission{},
 		&models.CustomRole{},
 		&models.User{},
+		&models.UserOrganization{},
 		&models.Team{},
 		&models.TeamMember{},
 		&models.APIKey{},
@@ -94,6 +95,7 @@ func runMigrations(db *gorm.DB) error {
 		// WhatsApp models
 		&models.WhatsAppAccount{},
 		&models.Contact{},
+		&models.Tag{},
 		&models.Message{},
 		&models.Template{},
 		&models.WhatsAppFlow{},
@@ -146,6 +148,7 @@ func cleanupTables(db *gorm.DB) {
 		"agent_transfers",
 		// WhatsApp tables
 		"messages",
+		"tags",
 		"contacts",
 		"templates",
 		"whatsapp_flows",
@@ -162,6 +165,7 @@ func cleanupTables(db *gorm.DB) {
 		"webhooks",
 		"custom_actions",
 		"user_availability_logs",
+		"user_organizations",
 		"users",
 		"organizations",
 	}
@@ -190,6 +194,7 @@ func TruncateTables(db *gorm.DB) {
 		"ai_contexts",
 		"agent_transfers",
 		"messages",
+		"tags",
 		"contacts",
 		"templates",
 		"whatsapp_flows",
@@ -204,6 +209,7 @@ func TruncateTables(db *gorm.DB) {
 		"webhooks",
 		"custom_actions",
 		"user_availability_logs",
+		"user_organizations",
 		"users",
 		"organizations",
 	}

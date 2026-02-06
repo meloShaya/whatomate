@@ -46,9 +46,12 @@ func (a *App) ListFlows(r *fastglue.Request) error {
 		return r.SendErrorEnvelope(fasthttp.StatusUnauthorized, "Unauthorized", nil, "")
 	}
 
+	pg := parsePagination(r)
+
 	// Optional filters
 	accountName := string(r.RequestCtx.QueryArgs().Peek("account"))
 	status := string(r.RequestCtx.QueryArgs().Peek("status"))
+	search := string(r.RequestCtx.QueryArgs().Peek("search"))
 
 	query := a.DB.Where("organization_id = ?", orgID)
 
@@ -58,9 +61,18 @@ func (a *App) ListFlows(r *fastglue.Request) error {
 	if status != "" {
 		query = query.Where("status = ?", status)
 	}
+	if search != "" {
+		searchPattern := "%" + search + "%"
+		// Search by flow name (case-insensitive)
+		query = query.Where("name ILIKE ?", searchPattern)
+	}
+
+	var total int64
+	query.Model(&models.WhatsAppFlow{}).Count(&total)
 
 	var flows []models.WhatsAppFlow
-	if err := query.Order("created_at DESC").Find(&flows).Error; err != nil {
+	if err := pg.Apply(query.Order("created_at DESC")).
+		Find(&flows).Error; err != nil {
 		a.Log.Error("Failed to list flows", "error", err)
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to list flows", nil, "")
 	}
@@ -70,8 +82,11 @@ func (a *App) ListFlows(r *fastglue.Request) error {
 		response[i] = flowToResponse(f)
 	}
 
-	return r.SendEnvelope(map[string]interface{}{
+	return r.SendEnvelope(map[string]any{
 		"flows": response,
+		"total": total,
+		"page":  pg.Page,
+		"limit": pg.Limit,
 	})
 }
 
@@ -83,8 +98,8 @@ func (a *App) CreateFlow(r *fastglue.Request) error {
 	}
 
 	var req FlowRequest
-	if err := r.Decode(&req, "json"); err != nil {
-		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "Invalid request body", nil, "")
+	if err := a.decodeRequest(r, &req); err != nil {
+		return nil
 	}
 
 	// Validate required fields
@@ -170,8 +185,8 @@ func (a *App) UpdateFlow(r *fastglue.Request) error {
 	}
 
 	var req FlowRequest
-	if err := r.Decode(&req, "json"); err != nil {
-		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "Invalid request body", nil, "")
+	if err := a.decodeRequest(r, &req); err != nil {
+		return nil
 	}
 
 	// Update fields
@@ -533,8 +548,8 @@ func (a *App) SyncFlows(r *fastglue.Request) error {
 	var req struct {
 		WhatsAppAccount string `json:"whatsapp_account"`
 	}
-	if err := r.Decode(&req, "json"); err != nil {
-		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "Invalid request body", nil, "")
+	if err := a.decodeRequest(r, &req); err != nil {
+		return nil
 	}
 
 	if req.WhatsAppAccount == "" {

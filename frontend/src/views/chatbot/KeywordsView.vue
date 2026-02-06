@@ -1,13 +1,14 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Dialog,
   DialogContent,
@@ -15,18 +16,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger
 } from '@/components/ui/dialog'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
 import {
   Select,
   SelectContent,
@@ -34,16 +24,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip'
 import { chatbotService } from '@/services/api'
 import { toast } from 'vue-sonner'
-import { PageHeader, SearchInput } from '@/components/shared'
+import { PageHeader, SearchInput, DataTable, DeleteConfirmDialog, type Column } from '@/components/shared'
 import { getErrorMessage } from '@/lib/api-utils'
-import { Plus, Pencil, Trash2, Key, Search } from 'lucide-vue-next'
+import { Plus, Pencil, Trash2, Key } from 'lucide-vue-next'
+import { useDebounceFn } from '@vueuse/core'
+
+const { t } = useI18n()
 
 interface ButtonItem {
   id: string
@@ -70,6 +58,23 @@ const editingRule = ref<KeywordRule | null>(null)
 const deleteDialogOpen = ref(false)
 const ruleToDelete = ref<KeywordRule | null>(null)
 
+// Pagination state
+const currentPage = ref(1)
+const totalItems = ref(0)
+const pageSize = 20
+
+const columns = computed<Column<KeywordRule>[]>(() => [
+  { key: 'keywords', label: t('keywords.keywordsColumn') },
+  { key: 'match_type', label: t('keywords.matchType'), sortable: true },
+  { key: 'response_type', label: t('keywords.response'), sortable: true },
+  { key: 'priority', label: t('keywords.priority'), sortable: true },
+  { key: 'status', label: t('keywords.status'), sortable: true, sortKey: 'enabled' },
+  { key: 'actions', label: t('keywords.actions'), align: 'right' },
+])
+
+const sortKey = ref('priority')
+const sortDirection = ref<'asc' | 'desc'>('desc')
+
 const formData = ref({
   keywords: '',
   match_type: 'contains' as 'exact' | 'contains' | 'regex',
@@ -82,7 +87,7 @@ const formData = ref({
 
 function addButton() {
   if (formData.value.buttons.length >= 10) {
-    toast.error('Maximum 10 buttons allowed')
+    toast.error(t('keywords.maxButtonsError'))
     return
   }
   formData.value.buttons.push({ id: '', title: '' })
@@ -99,16 +104,37 @@ onMounted(async () => {
 async function fetchRules() {
   isLoading.value = true
   try {
-    const response = await chatbotService.listKeywords()
+    const response = await chatbotService.listKeywords({
+      search: searchQuery.value || undefined,
+      page: currentPage.value,
+      limit: pageSize
+    })
     // API response is wrapped in { status: "success", data: { rules: [...] } }
-    const data = response.data.data || response.data
+    const data = (response.data as any).data || response.data
     rules.value = data.rules || []
+    totalItems.value = data.total ?? rules.value.length
   } catch (error) {
     console.error('Failed to load keyword rules:', error)
     rules.value = []
   } finally {
     isLoading.value = false
   }
+}
+
+// Debounced search to avoid too many API calls
+const debouncedSearch = useDebounceFn(() => {
+  currentPage.value = 1
+  fetchRules()
+}, 300)
+
+// Watch search query changes
+watch(searchQuery, () => {
+  debouncedSearch()
+})
+
+function handlePageChange(page: number) {
+  currentPage.value = page
+  fetchRules()
 }
 
 function openCreateDialog() {
@@ -141,13 +167,13 @@ function openEditDialog(rule: KeywordRule) {
 
 async function saveRule() {
   if (!formData.value.keywords.trim()) {
-    toast.error('Please enter at least one keyword')
+    toast.error(t('keywords.enterKeyword'))
     return
   }
 
   // Response content is required for text, optional for transfer
   if (formData.value.response_type !== 'transfer' && !formData.value.response_content.trim()) {
-    toast.error('Please enter a response message')
+    toast.error(t('keywords.enterResponse'))
     return
   }
 
@@ -170,16 +196,16 @@ async function saveRule() {
 
     if (editingRule.value) {
       await chatbotService.updateKeyword(editingRule.value.id, data)
-      toast.success('Keyword rule updated')
+      toast.success(t('common.updatedSuccess', { resource: t('resources.KeywordRule') }))
     } else {
       await chatbotService.createKeyword(data)
-      toast.success('Keyword rule created')
+      toast.success(t('common.createdSuccess', { resource: t('resources.KeywordRule') }))
     }
 
     isDialogOpen.value = false
     await fetchRules()
   } catch (error: any) {
-    toast.error(getErrorMessage(error, 'Failed to save keyword rule'))
+    toast.error(getErrorMessage(error, t('common.failedSave', { resource: t('resources.keywordRule') })))
   } finally {
     isSubmitting.value = false
   }
@@ -195,303 +221,271 @@ async function confirmDeleteRule() {
 
   try {
     await chatbotService.deleteKeyword(ruleToDelete.value.id)
-    toast.success('Keyword rule deleted')
+    toast.success(t('common.deletedSuccess', { resource: t('resources.KeywordRule') }))
     deleteDialogOpen.value = false
     ruleToDelete.value = null
     await fetchRules()
   } catch (error: any) {
-    toast.error(getErrorMessage(error, 'Failed to delete keyword rule'))
+    toast.error(getErrorMessage(error, t('common.failedDelete', { resource: t('resources.keywordRule') })))
   }
 }
 
-async function _toggleRule(rule: KeywordRule) {
+async function toggleRule(rule: KeywordRule) {
   try {
     await chatbotService.updateKeyword(rule.id, { enabled: !rule.enabled })
     rule.enabled = !rule.enabled
-    toast.success(rule.enabled ? 'Rule enabled' : 'Rule disabled')
+    toast.success(rule.enabled ? t('common.enabledSuccess', { resource: t('resources.KeywordRule') }) : t('common.disabledSuccess', { resource: t('resources.KeywordRule') }))
   } catch (error: any) {
-    toast.error(getErrorMessage(error, 'Failed to toggle rule'))
+    toast.error(getErrorMessage(error, t('common.failedToggle', { resource: t('resources.keywordRule') })))
   }
 }
-void _toggleRule // Reserved for future use
 
-const filteredRules = computed(() => {
-  if (!searchQuery.value) return rules.value
-  const query = searchQuery.value.toLowerCase()
-  return rules.value.filter(r =>
-    r.keywords.some(k => k.toLowerCase().includes(query))
-  )
+const emptyDescription = computed(() => {
+  if (searchQuery.value) {
+    return t('keywords.noMatchingRulesDesc', { query: searchQuery.value })
+  }
+  return t('keywords.noRulesYetDesc')
 })
 </script>
 
 <template>
   <div class="flex flex-col h-full bg-[#0a0a0b] light:bg-gray-50">
     <PageHeader
-      title="Keyword Rules"
+      :title="$t('keywords.title')"
       :icon="Key"
       icon-gradient="bg-gradient-to-br from-blue-500 to-cyan-600 shadow-blue-500/20"
       back-link="/chatbot"
-      :breadcrumbs="[{ label: 'Chatbot', href: '/chatbot' }, { label: 'Keywords' }]"
+      :breadcrumbs="[{ label: $t('keywords.backToChatbot'), href: '/chatbot' }, { label: $t('nav.keywords') }]"
     >
       <template #actions>
-        <Dialog v-model:open="isDialogOpen">
-          <DialogTrigger as-child>
-            <Button variant="outline" size="sm" @click="openCreateDialog">
-              <Plus class="h-4 w-4 mr-2" />
-              Add Rule
-            </Button>
-          </DialogTrigger>
-          <DialogContent class="max-w-md">
-            <DialogHeader>
-              <DialogTitle>{{ editingRule ? 'Edit' : 'Create' }} Keyword Rule</DialogTitle>
-              <DialogDescription>
-                Configure keywords that trigger automated responses.
-              </DialogDescription>
-            </DialogHeader>
-            <div class="space-y-4 py-4">
-              <div class="space-y-2">
-                <Label for="keywords">Keywords (comma-separated)</Label>
-                <Input
-                  id="keywords"
-                  v-model="formData.keywords"
-                  placeholder="hello, hi, hey"
-                />
-              </div>
-              <div class="space-y-2">
-                <Label for="match_type">Match Type</Label>
-                <Select v-model="formData.match_type">
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select match type" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="contains">Contains</SelectItem>
-                    <SelectItem value="exact">Exact Match</SelectItem>
-                    <SelectItem value="regex">Regex</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div class="space-y-2">
-                <Label for="response_type">Response Type</Label>
-                <Select v-model="formData.response_type">
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select response type" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="text">Text Response</SelectItem>
-                    <SelectItem value="transfer">Transfer to Agent</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div class="space-y-2">
-                <Label for="response">
-                  {{ formData.response_type === 'transfer' ? 'Transfer Message (optional)' : 'Response Message' }}
-                </Label>
-                <Textarea
-                  id="response"
-                  v-model="formData.response_content"
-                  :placeholder="formData.response_type === 'transfer' ? 'Connecting you with a human agent...' : 'Enter the response message...'"
-                  :rows="3"
-                />
-                <p v-if="formData.response_type === 'transfer'" class="text-xs text-muted-foreground">
-                  This message is sent before transferring the conversation to a human agent
-                </p>
-              </div>
-
-              <!-- Buttons Section (only for text responses) -->
-              <div v-if="formData.response_type !== 'transfer'" class="space-y-2">
-                <div class="flex items-center justify-between">
-                  <Label>Buttons (optional, max 10)</Label>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    @click="addButton"
-                    :disabled="formData.buttons.length >= 10"
-                  >
-                    <Plus class="h-3 w-3 mr-1" />
-                    Add Button
-                  </Button>
-                </div>
-                <p class="text-xs text-muted-foreground">
-                  Add buttons for quick replies. 3 or fewer shows as buttons, more than 3 shows as a list.
-                </p>
-                <div v-if="formData.buttons.length > 0" class="space-y-2 mt-2">
-                  <div
-                    v-for="(button, index) in formData.buttons"
-                    :key="index"
-                    class="flex items-center gap-2"
-                  >
-                    <Input
-                      v-model="button.id"
-                      placeholder="Button ID"
-                      class="flex-1"
-                    />
-                    <Input
-                      v-model="button.title"
-                      placeholder="Button Title"
-                      class="flex-1"
-                    />
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      @click="removeButton(index)"
-                    >
-                      <Trash2 class="h-4 w-4 text-destructive" />
-                    </Button>
-                  </div>
-                </div>
-              </div>
-
-              <div class="space-y-2">
-                <Label for="priority">Priority (higher = checked first)</Label>
-                <Input
-                  id="priority"
-                  v-model.number="formData.priority"
-                  type="number"
-                  min="0"
-                />
-              </div>
-              <div class="flex items-center gap-2">
-                <Switch
-                  id="enabled"
-                  :checked="formData.enabled"
-                  @update:checked="formData.enabled = $event"
-                />
-                <Label for="enabled">Enabled</Label>
-              </div>
-            </div>
-            <DialogFooter>
-              <Button variant="outline" size="sm" @click="isDialogOpen = false">Cancel</Button>
-              <Button size="sm" @click="saveRule" :disabled="isSubmitting">
-                {{ editingRule ? 'Update' : 'Create' }}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+        <Button variant="outline" size="sm" @click="openCreateDialog">
+          <Plus class="h-4 w-4 mr-2" />
+          {{ $t('keywords.addRule') }}
+        </Button>
       </template>
     </PageHeader>
 
-    <!-- Search -->
-    <div class="p-4 border-b border-white/[0.08] light:border-gray-200">
-      <SearchInput v-model="searchQuery" placeholder="Search keywords..." class="max-w-md" />
-    </div>
-
-    <!-- Rules List -->
     <ScrollArea class="flex-1">
-      <div class="p-6 space-y-4">
-        <!-- Loading Skeleton -->
-        <template v-if="isLoading">
-          <div v-for="i in 3" :key="i" class="rounded-xl border border-white/[0.08] bg-white/[0.02] p-4 light:bg-white light:border-gray-200">
-            <div class="flex items-start justify-between">
-              <div class="flex-1">
-                <div class="flex items-center gap-2 mb-2">
-                  <Skeleton class="h-4 w-4 bg-white/[0.08] light:bg-gray-200" />
-                  <Skeleton class="h-5 w-16 bg-white/[0.08] light:bg-gray-200" />
-                  <Skeleton class="h-5 w-16 bg-white/[0.08] light:bg-gray-200" />
-                  <Skeleton class="h-5 w-14 bg-white/[0.08] light:bg-gray-200" />
+      <div class="p-6">
+        <div class="max-w-6xl mx-auto">
+          <Card>
+            <CardHeader>
+              <div class="flex items-center justify-between">
+                <div>
+                  <CardTitle>{{ $t('keywords.yourRules') }}</CardTitle>
+                  <CardDescription>{{ $t('keywords.yourRulesDesc') }}</CardDescription>
                 </div>
-                <Skeleton class="h-4 w-48 mb-2 bg-white/[0.08] light:bg-gray-200" />
-                <Skeleton class="h-12 w-full bg-white/[0.08] light:bg-gray-200" />
+                <SearchInput v-model="searchQuery" :placeholder="$t('keywords.searchKeywords') + '...'" class="w-64" />
               </div>
-              <div class="flex items-center gap-2 ml-4">
-                <Skeleton class="h-8 w-8 rounded bg-white/[0.08] light:bg-gray-200" />
-                <Skeleton class="h-8 w-8 rounded bg-white/[0.08] light:bg-gray-200" />
-              </div>
-            </div>
-          </div>
-        </template>
-
-        <template v-else>
-        <div v-for="rule in filteredRules" :key="rule.id" class="rounded-xl border border-white/[0.08] bg-white/[0.02] p-4 light:bg-white light:border-gray-200">
-          <div class="flex items-start justify-between">
-            <div class="flex-1">
-              <div class="flex items-center gap-2 mb-2">
-                <div class="h-8 w-8 rounded-lg bg-blue-500/20 flex items-center justify-center">
-                  <Key class="h-4 w-4 text-blue-400" />
-                </div>
-                <div class="flex flex-wrap gap-1">
-                  <Badge v-for="keyword in rule.keywords" :key="keyword" variant="secondary">
-                    {{ keyword }}
+            </CardHeader>
+            <CardContent>
+              <DataTable
+                :items="rules"
+                :columns="columns"
+                :is-loading="isLoading"
+                :empty-icon="Key"
+                :empty-title="searchQuery ? $t('keywords.noMatchingRules') : $t('keywords.noRulesYet')"
+                :empty-description="emptyDescription"
+                v-model:sort-key="sortKey"
+                v-model:sort-direction="sortDirection"
+                server-pagination
+                :current-page="currentPage"
+                :total-items="totalItems"
+                :page-size="pageSize"
+                item-name="rules"
+                @page-change="handlePageChange"
+              >
+                <template #cell-keywords="{ item: rule }">
+                  <div class="flex flex-wrap gap-1">
+                    <Badge v-for="keyword in rule.keywords.slice(0, 3)" :key="keyword" variant="outline" class="text-xs">
+                      {{ keyword }}
+                    </Badge>
+                    <Badge v-if="rule.keywords.length > 3" variant="outline" class="text-xs">
+                      +{{ rule.keywords.length - 3 }}
+                    </Badge>
+                  </div>
+                </template>
+                <template #cell-match_type="{ item: rule }">
+                  <Badge class="text-xs capitalize bg-blue-500/20 text-blue-400 border-transparent">{{ rule.match_type }}</Badge>
+                </template>
+                <template #cell-response_type="{ item: rule }">
+                  <Badge
+                    :class="rule.response_type === 'transfer'
+                      ? 'bg-red-500/20 text-red-400 border-transparent light:bg-red-100 light:text-red-700'
+                      : 'bg-purple-500/20 text-purple-400 border-transparent light:bg-purple-100 light:text-purple-700'"
+                    class="text-xs"
+                  >
+                    {{ rule.response_type === 'transfer' ? $t('keywords.transfer') : $t('keywords.text') }}
                   </Badge>
-                </div>
-                <Badge v-if="rule.response_type === 'transfer'" class="bg-red-500/20 text-red-400 border-transparent light:bg-red-100 light:text-red-700">
-                  Transfer
-                </Badge>
-                <Badge
-                  :class="rule.enabled ? 'bg-emerald-500/20 text-emerald-400 border-transparent light:bg-emerald-100 light:text-emerald-700' : 'bg-white/[0.08] text-white/50 border-transparent light:bg-gray-100 light:text-gray-500'"
-                >
-                  {{ rule.enabled ? 'Active' : 'Inactive' }}
-                </Badge>
-              </div>
-              <p class="text-sm text-white/50 light:text-gray-500 mb-2">
-                Match: {{ rule.match_type }} | Priority: {{ rule.priority }}
-              </p>
-              <p class="text-sm bg-white/[0.04] light:bg-gray-100 p-2 rounded text-white/70 light:text-gray-600">
-                {{ rule.response_type === 'transfer'
-                  ? (rule.response_content?.body || 'Transfers to agent')
-                  : (rule.response_content?.body || 'No response configured') }}
-              </p>
-            </div>
-            <div class="flex items-center gap-2 ml-4">
-              <Tooltip>
-                <TooltipTrigger as-child>
-                  <Button variant="ghost" size="icon" @click="openEditDialog(rule)">
-                    <Pencil class="h-4 w-4" />
+                </template>
+                <template #cell-priority="{ item: rule }">
+                  <span class="text-muted-foreground">{{ rule.priority }}</span>
+                </template>
+                <template #cell-status="{ item: rule }">
+                  <div class="flex items-center gap-2">
+                    <Switch :checked="rule.enabled" @update:checked="toggleRule(rule)" />
+                    <span class="text-sm text-muted-foreground">{{ rule.enabled ? $t('keywords.active') : $t('keywords.inactive') }}</span>
+                  </div>
+                </template>
+                <template #cell-actions="{ item: rule }">
+                  <div class="flex items-center justify-end gap-1">
+                    <Button variant="ghost" size="icon" class="h-8 w-8" @click="openEditDialog(rule)">
+                      <Pencil class="h-4 w-4" />
+                    </Button>
+                    <Button variant="ghost" size="icon" class="h-8 w-8 text-destructive" @click="openDeleteDialog(rule)">
+                      <Trash2 class="h-4 w-4" />
+                    </Button>
+                  </div>
+                </template>
+                <template #empty-action>
+                  <Button v-if="!searchQuery" variant="outline" size="sm" @click="openCreateDialog">
+                    <Plus class="h-4 w-4 mr-2" />
+                    {{ $t('keywords.addRule') }}
                   </Button>
-                </TooltipTrigger>
-                <TooltipContent>Edit rule</TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger as-child>
-                  <Button variant="ghost" size="icon" @click="openDeleteDialog(rule)">
-                    <Trash2 class="h-4 w-4 text-destructive" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Delete rule</TooltipContent>
-              </Tooltip>
-            </div>
-          </div>
+                </template>
+              </DataTable>
+            </CardContent>
+          </Card>
         </div>
-
-        <div v-if="filteredRules.length === 0 && searchQuery" class="text-center py-12 text-white/50 light:text-gray-500">
-          <div class="h-16 w-16 rounded-xl bg-blue-500/20 flex items-center justify-center mx-auto mb-4">
-            <Search class="h-8 w-8 text-blue-400" />
-          </div>
-          <p class="text-lg font-medium text-white light:text-gray-900">No matching rules</p>
-          <p class="text-sm">No keyword rules match "{{ searchQuery }}"</p>
-        </div>
-        <div v-else-if="rules.length === 0" class="rounded-xl border border-white/[0.08] bg-white/[0.02] light:bg-white light:border-gray-200">
-          <div class="py-12 text-center text-white/50 light:text-gray-500">
-            <div class="h-16 w-16 rounded-xl bg-gradient-to-br from-blue-500 to-cyan-600 flex items-center justify-center mx-auto mb-4 shadow-lg shadow-blue-500/20">
-              <Key class="h-8 w-8 text-white" />
-            </div>
-            <p class="text-lg font-medium text-white light:text-gray-900">No keyword rules yet</p>
-            <p class="text-sm mb-4">Create your first keyword rule to get started.</p>
-            <Button variant="outline" size="sm" @click="openCreateDialog">
-              <Plus class="h-4 w-4 mr-2" />
-              Create Rule
-            </Button>
-          </div>
-        </div>
-        </template>
       </div>
     </ScrollArea>
 
-    <!-- Delete Confirmation Dialog -->
-    <AlertDialog v-model:open="deleteDialogOpen">
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Delete Keyword Rule</AlertDialogTitle>
-          <AlertDialogDescription>
-            Are you sure you want to delete this keyword rule? This action cannot be undone.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction @click="confirmDeleteRule">Delete</AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+    <!-- Create/Edit Dialog -->
+    <Dialog v-model:open="isDialogOpen">
+      <DialogContent class="max-w-md">
+        <DialogHeader>
+          <DialogTitle>{{ editingRule ? $t('keywords.editRule') : $t('keywords.createRule') }} {{ $t('keywords.keywordRule') }}</DialogTitle>
+          <DialogDescription>
+            {{ $t('keywords.dialogDesc') }}
+          </DialogDescription>
+        </DialogHeader>
+        <div class="space-y-4 py-4">
+          <div class="space-y-2">
+            <Label for="keywords">{{ $t('keywords.keywordsLabel') }}</Label>
+            <Input
+              id="keywords"
+              v-model="formData.keywords"
+              :placeholder="$t('keywords.keywordsPlaceholder')"
+            />
+          </div>
+          <div class="space-y-2">
+            <Label for="match_type">{{ $t('keywords.matchTypeLabel') }}</Label>
+            <Select v-model="formData.match_type">
+              <SelectTrigger>
+                <SelectValue :placeholder="$t('keywords.selectMatchType')" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="contains">{{ $t('keywords.contains') }}</SelectItem>
+                <SelectItem value="exact">{{ $t('keywords.exact') }}</SelectItem>
+                <SelectItem value="regex">{{ $t('keywords.regex') }}</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div class="space-y-2">
+            <Label for="response_type">{{ $t('keywords.responseType') }}</Label>
+            <Select v-model="formData.response_type">
+              <SelectTrigger>
+                <SelectValue :placeholder="$t('keywords.selectResponseType')" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="text">{{ $t('keywords.textResponse') }}</SelectItem>
+                <SelectItem value="transfer">{{ $t('keywords.transferToAgent') }}</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div class="space-y-2">
+            <Label for="response">
+              {{ formData.response_type === 'transfer' ? $t('keywords.transferMessage') : $t('keywords.responseMessage') }}
+            </Label>
+            <Textarea
+              id="response"
+              v-model="formData.response_content"
+              :placeholder="formData.response_type === 'transfer' ? $t('keywords.transferPlaceholder') + '...' : $t('keywords.responsePlaceholder') + '...'"
+              :rows="3"
+            />
+            <p v-if="formData.response_type === 'transfer'" class="text-xs text-muted-foreground">
+              {{ $t('keywords.transferHint') }}
+            </p>
+          </div>
+
+          <!-- Buttons Section (only for text responses) -->
+          <div v-if="formData.response_type !== 'transfer'" class="space-y-2">
+            <div class="flex items-center justify-between">
+              <Label>{{ $t('keywords.buttonsOptional') }}</Label>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                @click="addButton"
+                :disabled="formData.buttons.length >= 10"
+              >
+                <Plus class="h-3 w-3 mr-1" />
+                {{ $t('keywords.addButton') }}
+              </Button>
+            </div>
+            <p class="text-xs text-muted-foreground">
+              {{ $t('keywords.buttonsHint') }}
+            </p>
+            <div v-if="formData.buttons.length > 0" class="space-y-2 mt-2">
+              <div
+                v-for="(button, index) in formData.buttons"
+                :key="index"
+                class="flex items-center gap-2"
+              >
+                <Input
+                  v-model="button.id"
+                  :placeholder="$t('keywords.buttonId')"
+                  class="flex-1"
+                />
+                <Input
+                  v-model="button.title"
+                  :placeholder="$t('keywords.buttonTitle')"
+                  class="flex-1"
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  @click="removeButton(index)"
+                >
+                  <Trash2 class="h-4 w-4 text-destructive" />
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          <div class="space-y-2">
+            <Label for="priority">{{ $t('keywords.priorityLabel') }}</Label>
+            <Input
+              id="priority"
+              v-model.number="formData.priority"
+              type="number"
+              min="0"
+            />
+          </div>
+          <div class="flex items-center gap-2">
+            <Switch
+              id="enabled"
+              :checked="formData.enabled"
+              @update:checked="formData.enabled = $event"
+            />
+            <Label for="enabled">{{ $t('keywords.enabled') }}</Label>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" size="sm" @click="isDialogOpen = false">{{ $t('common.cancel') }}</Button>
+          <Button size="sm" @click="saveRule" :disabled="isSubmitting">
+            {{ editingRule ? $t('common.update') : $t('common.create') }}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <DeleteConfirmDialog
+      v-model:open="deleteDialogOpen"
+      :title="$t('keywords.deleteRule')"
+      :description="$t('keywords.deleteRuleDesc')"
+      @confirm="confirmDeleteRule"
+    />
   </div>
 </template>

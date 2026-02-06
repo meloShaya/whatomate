@@ -1,23 +1,27 @@
 <script setup lang="ts">
-import { ref, onMounted, computed, watch } from 'vue'
+import { ref, onMounted, watch, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import DOMPurify from 'dompurify'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Textarea } from '@/components/ui/textarea'
 import { Separator } from '@/components/ui/separator'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { PageHeader, SearchInput } from '@/components/shared'
+import { PageHeader, SearchInput, DataTable, DeleteConfirmDialog, type Column } from '@/components/shared'
 import { api, templatesService } from '@/services/api'
 import { useOrganizationsStore } from '@/stores/organizations'
 import { toast } from 'vue-sonner'
 import { Plus, RefreshCw, FileText, Eye, Pencil, Trash2, Loader2, MessageSquare, Image, FileIcon, Video, X, Check, AlertCircle, Send, Upload } from 'lucide-vue-next'
 import { getErrorMessage } from '@/lib/api-utils'
+import { useDebounceFn } from '@vueuse/core'
+
+const { t } = useI18n()
 
 interface WhatsAppAccount {
   id: string
@@ -84,6 +88,23 @@ const formData = ref({
   sample_values: [] as any[]
 })
 
+// Pagination state
+const currentPage = ref(1)
+const totalItems = ref(0)
+const pageSize = 20
+
+const columns = computed<Column<Template>[]>(() => [
+  { key: 'name', label: t('templates.name'), sortable: true },
+  { key: 'category', label: t('templates.category'), sortable: true },
+  { key: 'status', label: t('templates.status'), sortable: true },
+  { key: 'language', label: t('templates.language'), sortable: true },
+  { key: 'header_type', label: t('templates.header') },
+  { key: 'actions', label: t('common.actions'), align: 'right' },
+])
+
+const sortKey = ref('name')
+const sortDirection = ref<'asc' | 'desc'>('asc')
+
 const languages = [
   { code: 'en', name: 'English' },
   { code: 'en_US', name: 'English (US)' },
@@ -138,27 +159,47 @@ async function fetchAccounts() {
 function onAccountChange(value: string | number | bigint | Record<string, any> | null) {
   if (typeof value !== 'string') return
   localStorage.setItem('templates_selected_account', value)
+  currentPage.value = 1
   fetchTemplates()
 }
 
 async function fetchTemplates() {
   isLoading.value = true
   try {
-    const params = selectedAccount.value && selectedAccount.value !== 'all' ? `?account=${selectedAccount.value}` : ''
-    const response = await api.get(`/templates${params}`)
-    templates.value = response.data.data?.templates || []
+    const response = await templatesService.list({
+      account: selectedAccount.value !== 'all' ? selectedAccount.value : undefined,
+      search: searchQuery.value || undefined,
+      page: currentPage.value,
+      limit: pageSize
+    })
+    const data = (response.data as any).data || response.data
+    templates.value = data.templates || []
+    totalItems.value = data.total ?? templates.value.length
   } catch (error: any) {
     console.error('Failed to fetch templates:', error)
-    toast.error('Failed to load templates')
+    toast.error(t('common.failedLoad', { resource: t('resources.templates') }))
     templates.value = []
   } finally {
     isLoading.value = false
   }
 }
 
+// Debounced search
+const debouncedSearch = useDebounceFn(() => {
+  currentPage.value = 1
+  fetchTemplates()
+}, 300)
+
+watch(searchQuery, () => debouncedSearch())
+
+function handlePageChange(page: number) {
+  currentPage.value = page
+  fetchTemplates()
+}
+
 async function syncTemplates() {
   if (!selectedAccount.value || selectedAccount.value === 'all') {
-    toast.error('Please select a WhatsApp account first')
+    toast.error(t('templates.selectAccountFirst'))
     return
   }
 
@@ -167,10 +208,10 @@ async function syncTemplates() {
     const response = await api.post('/templates/sync', {
       whatsapp_account: selectedAccount.value
     })
-    toast.success(response.data.data.message || 'Templates synced successfully')
+    toast.success(response.data.data.message || t('templates.syncSuccess'))
     await fetchTemplates()
   } catch (error) {
-    toast.error(getErrorMessage(error, 'Failed to sync templates'))
+    toast.error(getErrorMessage(error, t('templates.syncFailed')))
   } finally {
     isSyncing.value = false
   }
@@ -227,12 +268,12 @@ function openPreview(template: Template) {
 
 async function saveTemplate() {
   if (!formData.value.name.trim() || !formData.value.body_content.trim()) {
-    toast.error('Template name and body content are required')
+    toast.error(t('templates.nameBodyRequired'))
     return
   }
 
   if (!formData.value.whatsapp_account) {
-    toast.error('Please select a WhatsApp account')
+    toast.error(t('templates.selectAccountRequired'))
     return
   }
 
@@ -240,15 +281,15 @@ async function saveTemplate() {
   try {
     if (editingTemplate.value) {
       await api.put(`/templates/${editingTemplate.value.id}`, formData.value)
-      toast.success('Template updated successfully')
+      toast.success(t('common.updatedSuccess', { resource: t('resources.Template') }))
     } else {
       await api.post('/templates', formData.value)
-      toast.success('Template created successfully')
+      toast.success(t('common.createdSuccess', { resource: t('resources.Template') }))
     }
     isDialogOpen.value = false
     await fetchTemplates()
   } catch (error) {
-    toast.error(getErrorMessage(error, 'Failed to save template'))
+    toast.error(getErrorMessage(error, t('common.failedSave', { resource: t('resources.template') })))
   } finally {
     isSubmitting.value = false
   }
@@ -264,12 +305,12 @@ async function confirmDeleteTemplate() {
 
   try {
     await api.delete(`/templates/${templateToDelete.value.id}`)
-    toast.success('Template deleted')
+    toast.success(t('common.deletedSuccess', { resource: t('resources.Template') }))
     deleteDialogOpen.value = false
     templateToDelete.value = null
     await fetchTemplates()
   } catch (error) {
-    toast.error(getErrorMessage(error, 'Failed to delete template'))
+    toast.error(getErrorMessage(error, t('common.failedDelete', { resource: t('resources.template') })))
   }
 }
 
@@ -286,12 +327,12 @@ async function confirmPublishTemplate() {
   publishingTemplateId.value = templateToPublish.value.id
   try {
     const response = await api.post(`/templates/${templateToPublish.value.id}/publish`)
-    toast.success(response.data.data?.message || 'Template submitted to Meta for approval')
+    toast.success(response.data.data?.message || t('templates.publishSuccess'))
     publishDialogOpen.value = false
     templateToPublish.value = null
     await fetchTemplates()
   } catch (error) {
-    toast.error(getErrorMessage(error, 'Failed to publish template'), { duration: 8000 })
+    toast.error(getErrorMessage(error, t('templates.publishFailed')), { duration: 8000 })
   } finally {
     publishingTemplateId.value = null
   }
@@ -339,15 +380,6 @@ function getHeaderIcon(type: string) {
   }
 }
 
-const filteredTemplates = computed(() => {
-  if (!searchQuery.value) return templates.value
-  const query = searchQuery.value.toLowerCase()
-  return templates.value.filter(t =>
-    t.name.toLowerCase().includes(query) ||
-    t.display_name?.toLowerCase().includes(query) ||
-    t.body_content.toLowerCase().includes(query)
-  )
-})
 
 // Extract all parameter names (both positional {{1}} and named {{name}})
 function extractParamNames(content: string): string[] {
@@ -384,7 +416,7 @@ const buttonTypes = [
 
 function addButton() {
   if (formData.value.buttons.length >= 3) {
-    toast.error('Maximum 3 buttons allowed')
+    toast.error(t('templates.maxButtons'))
     return
   }
   formData.value.buttons.push({
@@ -412,12 +444,12 @@ function onHeaderMediaFileChange(event: Event) {
 // Upload header media file to Meta
 async function uploadHeaderMedia() {
   if (!headerMediaFile.value) {
-    toast.error('Please select a file first')
+    toast.error(t('templates.selectAccountFirst'))
     return
   }
 
   if (!formData.value.whatsapp_account) {
-    toast.error('Please select a WhatsApp account first')
+    toast.error(t('templates.selectAccountFirst'))
     return
   }
 
@@ -427,9 +459,9 @@ async function uploadHeaderMedia() {
     const data = response.data.data
     headerMediaHandle.value = data.handle
     formData.value.header_content = data.handle
-    toast.success(`Media uploaded: ${data.filename}`)
+    toast.success(t('templates.mediaUploadedSuccess'))
   } catch (error) {
-    toast.error(getErrorMessage(error, 'Failed to upload media'))
+    toast.error(getErrorMessage(error, t('templates.uploadFailed')))
   } finally {
     headerMediaUploading.value = false
   }
@@ -492,140 +524,137 @@ function formatPreview(text: string, samples: any[]): string {
 
 <template>
   <div class="flex flex-col h-full bg-[#0a0a0b] light:bg-gray-50">
-    <PageHeader title="Message Templates" subtitle="Create and manage WhatsApp message templates" :icon="FileText" icon-gradient="bg-gradient-to-br from-blue-500 to-cyan-600 shadow-blue-500/20">
+    <PageHeader :title="$t('templates.title')" :subtitle="$t('templates.subtitle')" :icon="FileText" icon-gradient="bg-gradient-to-br from-blue-500 to-cyan-600 shadow-blue-500/20">
       <template #actions>
         <Button variant="outline" size="sm" @click="syncTemplates" :disabled="isSyncing || !selectedAccount || selectedAccount === 'all'">
           <Loader2 v-if="isSyncing" class="h-4 w-4 mr-2 animate-spin" />
           <RefreshCw v-else class="h-4 w-4 mr-2" />
-          Sync from Meta
+          {{ $t('templates.syncFromMeta') }}
         </Button>
         <Button variant="outline" size="sm" @click="openCreateDialog">
           <Plus class="h-4 w-4 mr-2" />
-          Create Template
+          {{ $t('templates.createTemplate') }}
         </Button>
       </template>
     </PageHeader>
 
-    <!-- Filters -->
-    <div class="p-4 border-b flex items-center gap-4 flex-wrap">
-      <div class="flex items-center gap-2">
-        <Label class="text-sm text-muted-foreground">Account:</Label>
-        <Select v-model="selectedAccount" @update:model-value="onAccountChange">
-          <SelectTrigger class="w-[180px]">
-            <SelectValue placeholder="All Accounts" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Accounts</SelectItem>
-            <SelectItem v-for="account in accounts" :key="account.id" :value="account.name">
-              {{ account.name }}
-            </SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
-      <SearchInput v-model="searchQuery" placeholder="Search templates..." class="flex-1 max-w-md" />
-    </div>
-
-    <!-- Loading State -->
-    <div v-if="isLoading" class="flex-1 flex items-center justify-center">
-      <Loader2 class="h-8 w-8 animate-spin text-muted-foreground" />
-    </div>
-
-    <!-- Templates Grid -->
-    <ScrollArea v-else class="flex-1">
-      <div class="p-6 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        <Card v-for="template in filteredTemplates" :key="template.id" class="flex flex-col">
-          <CardHeader class="pb-3">
-            <div class="flex items-start justify-between">
-              <div class="flex-1 min-w-0">
-                <CardTitle class="text-base truncate">{{ template.display_name || template.name }}</CardTitle>
-                <p class="text-xs font-mono text-muted-foreground truncate mt-1">{{ template.name }}</p>
-                <div class="flex items-center gap-2 mt-2 flex-wrap">
-                  <span :class="['px-2 py-0.5 rounded text-xs font-medium', getCategoryBadgeClass(template.category)]">
-                    {{ template.category }}
-                  </span>
-                  <span :class="['px-2 py-0.5 rounded text-xs font-medium', getStatusBadgeClass(template.status)]">
-                    {{ template.status }}
-                  </span>
-                  <span class="text-xs text-muted-foreground">{{ template.language }}</span>
+    <ScrollArea class="flex-1">
+      <div class="p-6">
+        <div class="max-w-6xl mx-auto">
+          <Card>
+            <CardHeader>
+              <div class="flex items-center justify-between flex-wrap gap-4">
+                <div>
+                  <CardTitle>{{ $t('templates.yourTemplates') }}</CardTitle>
+                  <CardDescription>{{ $t('templates.yourTemplatesDesc') }}</CardDescription>
+                </div>
+                <div class="flex items-center gap-4 flex-wrap">
+                  <div class="flex items-center gap-2">
+                    <Label class="text-sm text-muted-foreground">{{ $t('templates.account') }}:</Label>
+                    <Select v-model="selectedAccount" @update:model-value="onAccountChange">
+                      <SelectTrigger class="w-[180px]">
+                        <SelectValue :placeholder="$t('templates.allAccounts')" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">{{ $t('templates.allAccounts') }}</SelectItem>
+                        <SelectItem v-for="account in accounts" :key="account.id" :value="account.name">
+                          {{ account.name }}
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <SearchInput v-model="searchQuery" :placeholder="$t('templates.searchTemplates') + '...'" class="w-64" />
                 </div>
               </div>
-              <component :is="getHeaderIcon(template.header_type)" class="h-5 w-5 text-muted-foreground flex-shrink-0" />
-            </div>
-          </CardHeader>
-          <CardContent class="flex-1">
-            <p class="text-sm text-muted-foreground line-clamp-3">
-              {{ template.body_content }}
-            </p>
-            <div v-if="template.footer_content" class="mt-2 text-xs text-muted-foreground italic">
-              {{ template.footer_content }}
-            </div>
-          </CardContent>
-          <div class="px-6 pb-4 flex items-center gap-1 border-t pt-3">
-            <Tooltip>
-              <TooltipTrigger as-child>
-                <Button variant="ghost" size="sm" @click="openPreview(template)">
-                  <Eye class="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Preview</TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger as-child>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  @click="openEditDialog(template)"
-                  :disabled="template.status === 'PENDING'"
-                >
-                  <Pencil class="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Edit</TooltipContent>
-            </Tooltip>
-            <Tooltip v-if="template.status === 'DRAFT' || template.status === 'REJECTED'">
-              <TooltipTrigger as-child>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  @click="openPublishDialog(template)"
-                  :disabled="publishingTemplateId === template.id"
-                  class="text-blue-600 hover:text-blue-700"
-                >
-                  <Loader2 v-if="publishingTemplateId === template.id" class="h-4 w-4 animate-spin" />
-                  <Send v-else class="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>{{ template.meta_template_id ? 'Republish to Meta' : 'Publish to Meta' }}</TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger as-child>
-                <Button variant="ghost" size="sm" @click="openDeleteDialog(template)">
-                  <Trash2 class="h-4 w-4 text-destructive" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Delete</TooltipContent>
-            </Tooltip>
-          </div>
-        </Card>
-
-        <!-- Empty State -->
-        <Card v-if="filteredTemplates.length === 0" class="col-span-full">
-          <CardContent class="py-12 text-center text-muted-foreground">
-            <FileText class="h-12 w-12 mx-auto mb-4 opacity-50" />
-            <p class="text-lg font-medium">No templates found</p>
-            <p class="text-sm mb-4">Create a new template or sync from Meta.</p>
-            <div class="flex items-center justify-center gap-2">
-              <Button variant="outline" size="sm" @click="syncTemplates" :disabled="!selectedAccount || selectedAccount === 'all'">
-                <RefreshCw class="h-4 w-4 mr-2" />
-                Sync from Meta
-              </Button>
-              <Button variant="outline" size="sm" @click="openCreateDialog">
-                <Plus class="h-4 w-4 mr-2" />
-                Create Template
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+            </CardHeader>
+            <CardContent>
+              <DataTable
+                :items="templates"
+                :columns="columns"
+                :is-loading="isLoading"
+                :empty-icon="FileText"
+                :empty-title="$t('templates.noTemplatesFound')"
+                :empty-description="$t('templates.noTemplatesFoundDesc')"
+                server-pagination
+                :current-page="currentPage"
+                :total-items="totalItems"
+                :page-size="pageSize"
+                item-name="templates"
+                @page-change="handlePageChange"
+                v-model:sort-key="sortKey"
+                v-model:sort-direction="sortDirection"
+              >
+                <template #cell-name="{ item: template }">
+                  <div>
+                    <span class="font-medium">{{ template.display_name || template.name }}</span>
+                    <p class="text-xs font-mono text-muted-foreground">{{ template.name }}</p>
+                  </div>
+                </template>
+                <template #cell-category="{ item: template }">
+                  <Badge :class="getCategoryBadgeClass(template.category)" class="text-xs">
+                    {{ template.category }}
+                  </Badge>
+                </template>
+                <template #cell-status="{ item: template }">
+                  <Badge :class="getStatusBadgeClass(template.status)" class="text-xs">
+                    {{ template.status }}
+                  </Badge>
+                </template>
+                <template #cell-language="{ item: template }">
+                  <span class="text-muted-foreground">{{ template.language }}</span>
+                </template>
+                <template #cell-header_type="{ item: template }">
+                  <div class="flex items-center gap-1">
+                    <component :is="getHeaderIcon(template.header_type)" class="h-4 w-4 text-muted-foreground" />
+                    <span class="text-muted-foreground text-sm">{{ template.header_type || 'NONE' }}</span>
+                  </div>
+                </template>
+                <template #cell-actions="{ item: template }">
+                  <div class="flex items-center justify-end gap-1">
+                    <Button variant="ghost" size="icon" class="h-8 w-8" @click="openPreview(template)">
+                      <Eye class="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      class="h-8 w-8"
+                      @click="openEditDialog(template)"
+                      :disabled="template.status === 'PENDING'"
+                    >
+                      <Pencil class="h-4 w-4" />
+                    </Button>
+                    <Button
+                      v-if="template.status === 'DRAFT' || template.status === 'REJECTED'"
+                      variant="ghost"
+                      size="icon"
+                      class="h-8 w-8 text-blue-600 hover:text-blue-700"
+                      @click="openPublishDialog(template)"
+                      :disabled="publishingTemplateId === template.id"
+                    >
+                      <Loader2 v-if="publishingTemplateId === template.id" class="h-4 w-4 animate-spin" />
+                      <Send v-else class="h-4 w-4" />
+                    </Button>
+                    <Button variant="ghost" size="icon" class="h-8 w-8 text-destructive" @click="openDeleteDialog(template)">
+                      <Trash2 class="h-4 w-4" />
+                    </Button>
+                  </div>
+                </template>
+                <template #empty-action>
+                  <div class="flex items-center justify-center gap-2">
+                    <Button variant="outline" size="sm" @click="syncTemplates" :disabled="!selectedAccount || selectedAccount === 'all'">
+                      <RefreshCw class="h-4 w-4 mr-2" />
+                      {{ $t('templates.syncFromMeta') }}
+                    </Button>
+                    <Button variant="outline" size="sm" @click="openCreateDialog">
+                      <Plus class="h-4 w-4 mr-2" />
+                      {{ $t('templates.createTemplate') }}
+                    </Button>
+                  </div>
+                </template>
+              </DataTable>
+            </CardContent>
+          </Card>
+        </div>
       </div>
     </ScrollArea>
 
@@ -633,22 +662,22 @@ function formatPreview(text: string, samples: any[]): string {
     <Dialog v-model:open="isDialogOpen">
       <DialogContent class="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{{ editingTemplate ? 'Edit' : 'Create' }} Template</DialogTitle>
+          <DialogTitle>{{ editingTemplate ? $t('templates.editDialogTitle') : $t('templates.createDialogTitle') }}</DialogTitle>
           <DialogDescription>
-            {{ editingTemplate ? 'Update your message template.' : 'Create a new WhatsApp message template.' }}
+            {{ editingTemplate ? $t('templates.editDialogDesc') : $t('templates.createDialogDesc') }}
           </DialogDescription>
         </DialogHeader>
 
         <div class="space-y-4 py-4">
           <!-- Account Selection -->
           <div class="space-y-2">
-            <Label>WhatsApp Account <span class="text-destructive">*</span></Label>
+            <Label>{{ $t('templates.whatsappAccount') }} <span class="text-destructive">*</span></Label>
             <select
               v-model="formData.whatsapp_account"
               class="w-full h-10 rounded-md border bg-background px-3 disabled:cursor-not-allowed disabled:opacity-50"
               :disabled="!!editingTemplate"
             >
-              <option value="">Select account...</option>
+              <option value="">{{ $t('templates.selectAccount') }}...</option>
               <option v-for="account in accounts" :key="account.id" :value="account.name">
                 {{ account.name }}
               </option>
@@ -658,18 +687,18 @@ function formatPreview(text: string, samples: any[]): string {
           <div class="grid grid-cols-2 gap-4">
             <!-- Template Name -->
             <div class="space-y-2">
-              <Label>Template Name <span class="text-destructive">*</span></Label>
+              <Label>{{ $t('templates.templateName') }} <span class="text-destructive">*</span></Label>
               <Input
                 v-model="formData.name"
                 placeholder="order_confirmation"
                 :disabled="!!editingTemplate"
               />
-              <p class="text-xs text-muted-foreground">Lowercase, underscores only</p>
+              <p class="text-xs text-muted-foreground">{{ $t('templates.templateNameLowercase') }}</p>
             </div>
 
             <!-- Display Name -->
             <div class="space-y-2">
-              <Label>Display Name</Label>
+              <Label>{{ $t('templates.displayName') }}</Label>
               <Input
                 v-model="formData.display_name"
                 placeholder="Order Confirmation"
@@ -680,7 +709,7 @@ function formatPreview(text: string, samples: any[]): string {
           <div class="grid grid-cols-2 gap-4">
             <!-- Language -->
             <div class="space-y-2">
-              <Label>Language <span class="text-destructive">*</span></Label>
+              <Label>{{ $t('templates.language') }} <span class="text-destructive">*</span></Label>
               <select
                 v-model="formData.language"
                 class="w-full h-10 rounded-md border bg-background px-3 disabled:cursor-not-allowed disabled:opacity-50"
@@ -694,7 +723,7 @@ function formatPreview(text: string, samples: any[]): string {
 
             <!-- Category -->
             <div class="space-y-2">
-              <Label>Category <span class="text-destructive">*</span></Label>
+              <Label>{{ $t('templates.category') }} <span class="text-destructive">*</span></Label>
               <select
                 v-model="formData.category"
                 class="w-full h-10 rounded-md border bg-background px-3 disabled:cursor-not-allowed disabled:opacity-50"
@@ -711,7 +740,7 @@ function formatPreview(text: string, samples: any[]): string {
 
           <!-- Header -->
           <div class="space-y-2">
-            <Label>Header Type</Label>
+            <Label>{{ $t('templates.headerType') }}</Label>
             <select v-model="formData.header_type" class="w-full h-10 rounded-md border bg-background px-3">
               <option v-for="type in headerTypes" :key="type.value" :value="type.value">
                 {{ type.label }}
@@ -720,15 +749,15 @@ function formatPreview(text: string, samples: any[]): string {
           </div>
 
           <div v-if="formData.header_type === 'TEXT'" class="space-y-2">
-            <Label>Header Text</Label>
-            <Input v-model="formData.header_content" placeholder="Enter header text..." />
+            <Label>{{ $t('templates.headerText') }}</Label>
+            <Input v-model="formData.header_content" :placeholder="$t('templates.headerTextPlaceholder') + '...'" />
           </div>
 
           <!-- Header Media Upload for IMAGE/VIDEO/DOCUMENT -->
           <div v-else-if="['IMAGE', 'VIDEO', 'DOCUMENT'].includes(formData.header_type)" class="space-y-3">
-            <Label>Header Sample {{ formData.header_type.toLowerCase() }}</Label>
+            <Label>{{ $t('templates.headerSample') }} {{ formData.header_type.toLowerCase() }}</Label>
             <p class="text-xs text-muted-foreground">
-              Upload a sample {{ formData.header_type.toLowerCase() }} for Meta to review. This helps with template approval.
+              {{ $t('templates.uploadSampleHint', { type: formData.header_type.toLowerCase() }) }}
             </p>
 
             <div class="flex items-center gap-2">
@@ -748,20 +777,20 @@ function formatPreview(text: string, samples: any[]): string {
               >
                 <Loader2 v-if="headerMediaUploading" class="h-4 w-4 mr-1 animate-spin" />
                 <Upload v-else class="h-4 w-4 mr-1" />
-                Upload
+                {{ $t('templates.uploadMedia') }}
               </Button>
             </div>
 
             <!-- Show upload status -->
             <div v-if="headerMediaFilename && !headerMediaHandle" class="text-sm text-muted-foreground">
-              Selected: {{ headerMediaFilename }} (click Upload to get handle)
+              {{ $t('templates.selectedFile', { filename: headerMediaFilename }) }}
             </div>
 
             <!-- Show uploaded handle -->
             <div v-if="headerMediaHandle" class="bg-green-950 light:bg-green-50 border border-green-800 light:border-green-200 rounded-lg p-3">
               <div class="flex items-center gap-2">
                 <Check class="h-4 w-4 text-green-600" />
-                <span class="text-sm text-green-200 light:text-green-800">Media uploaded successfully</span>
+                <span class="text-sm text-green-200 light:text-green-800">{{ $t('templates.mediaUploadedSuccess') }}</span>
               </div>
               <p class="text-xs text-muted-foreground mt-1 font-mono truncate">
                 Handle: {{ headerMediaHandle.substring(0, 40) }}...
@@ -770,29 +799,29 @@ function formatPreview(text: string, samples: any[]): string {
 
             <!-- Accepted formats hint -->
             <p class="text-xs text-muted-foreground">
-              <span v-if="formData.header_type === 'IMAGE'">Accepted: JPEG, PNG (max 5MB)</span>
-              <span v-else-if="formData.header_type === 'VIDEO'">Accepted: MP4 (max 16MB)</span>
-              <span v-else-if="formData.header_type === 'DOCUMENT'">Accepted: PDF (max 100MB)</span>
+              <span v-if="formData.header_type === 'IMAGE'">{{ $t('templates.imageFormats') }}</span>
+              <span v-else-if="formData.header_type === 'VIDEO'">{{ $t('templates.videoFormats') }}</span>
+              <span v-else-if="formData.header_type === 'DOCUMENT'">{{ $t('templates.documentFormats') }}</span>
             </p>
           </div>
 
           <!-- Body -->
           <div class="space-y-2">
-            <Label>Body Content <span class="text-destructive">*</span></Label>
+            <Label>{{ $t('templates.bodyContent') }} <span class="text-destructive">*</span></Label>
             <Textarea
               v-model="formData.body_content"
-              placeholder="Hi {{1}}, your order #{{2}} has been confirmed... (or use named: {{name}}, {{order_id}})"
+              :placeholder="$t('templates.bodyPlaceholder')"
               :rows="4"
             />
             <p class="text-xs text-muted-foreground">
-              Use <span v-pre>{{name}}</span>, <span v-pre>{{order_id}}</span> for named variables or <span v-pre>{{1}}</span>, <span v-pre>{{2}}</span> for positional variables
+              {{ $t('templates.bodyVariablesHint') }}
             </p>
           </div>
 
           <!-- Footer -->
           <div class="space-y-2">
-            <Label>Footer (optional)</Label>
-            <Input v-model="formData.footer_content" placeholder="Thank you for your business!" />
+            <Label>{{ $t('templates.footerOptional') }}</Label>
+            <Input v-model="formData.footer_content" :placeholder="$t('templates.footerPlaceholder')" />
           </div>
 
           <Separator />
@@ -800,7 +829,7 @@ function formatPreview(text: string, samples: any[]): string {
           <!-- Buttons -->
           <div class="space-y-3">
             <div class="flex items-center justify-between">
-              <Label>Buttons (optional)</Label>
+              <Label>{{ $t('templates.buttonsOptional') }}</Label>
               <Button
                 type="button"
                 variant="outline"
@@ -809,14 +838,14 @@ function formatPreview(text: string, samples: any[]): string {
                 :disabled="formData.buttons.length >= 3"
               >
                 <Plus class="h-4 w-4 mr-1" />
-                Add Button
+                {{ $t('templates.addButton') }}
               </Button>
             </div>
-            <p class="text-xs text-muted-foreground">Add up to 3 buttons to your template</p>
+            <p class="text-xs text-muted-foreground">{{ $t('templates.maxButtonsHint') }}</p>
 
             <div v-for="(button, index) in formData.buttons" :key="index" class="border rounded-lg p-3 space-y-3">
               <div class="flex items-center justify-between">
-                <span class="text-sm font-medium">Button {{ index + 1 }}</span>
+                <span class="text-sm font-medium">{{ $t('templates.button') }} {{ index + 1 }}</span>
                 <Button type="button" variant="ghost" size="sm" @click="removeButton(index)">
                   <X class="h-4 w-4 text-destructive" />
                 </Button>
@@ -824,7 +853,7 @@ function formatPreview(text: string, samples: any[]): string {
 
               <div class="grid grid-cols-2 gap-3">
                 <div class="space-y-1">
-                  <Label class="text-xs">Type</Label>
+                  <Label class="text-xs">{{ $t('templates.buttonType') }}</Label>
                   <select v-model="button.type" class="w-full h-9 rounded-md border bg-background px-2 text-sm">
                     <option v-for="bt in buttonTypes" :key="bt.value" :value="bt.value">
                       {{ bt.label }}
@@ -832,21 +861,21 @@ function formatPreview(text: string, samples: any[]): string {
                   </select>
                 </div>
                 <div class="space-y-1">
-                  <Label class="text-xs">Button Text</Label>
-                  <Input v-model="button.text" placeholder="Button text" class="h-9" />
+                  <Label class="text-xs">{{ $t('templates.buttonText') }}</Label>
+                  <Input v-model="button.text" :placeholder="$t('templates.buttonTextPlaceholder')" class="h-9" />
                 </div>
               </div>
 
               <!-- URL specific fields -->
               <div v-if="button.type === 'URL'" class="space-y-1">
-                <Label class="text-xs">URL</Label>
+                <Label class="text-xs">{{ $t('templates.buttonUrl') }}</Label>
                 <Input v-model="button.url" placeholder="https://example.com/{{path}}" class="h-9" />
-                <p class="text-xs text-muted-foreground">Use <span v-pre>{{path}}</span> for dynamic URL suffix</p>
+                <p class="text-xs text-muted-foreground">{{ $t('templates.buttonUrlHint') }}</p>
               </div>
 
               <!-- Phone number specific fields -->
               <div v-if="button.type === 'PHONE_NUMBER'" class="space-y-1">
-                <Label class="text-xs">Phone Number</Label>
+                <Label class="text-xs">{{ $t('templates.buttonPhoneNumber') }}</Label>
                 <Input v-model="button.phone_number" placeholder="+1234567890" class="h-9" />
               </div>
             </div>
@@ -857,22 +886,22 @@ function formatPreview(text: string, samples: any[]): string {
           <!-- Sample Values for Variables -->
           <div v-if="bodyVariables.length > 0 || headerVariables.length > 0" class="space-y-3">
             <div>
-              <Label>Sample Values for Variables</Label>
+              <Label>{{ $t('templates.sampleValues') }}</Label>
               <p class="text-xs text-muted-foreground mt-1">
-                Provide example values for your variables. This helps Meta review and approve your template faster.
+                {{ $t('templates.sampleValuesHint') }}
               </p>
             </div>
 
             <!-- Header Variables -->
             <div v-if="headerVariables.length > 0" class="space-y-2">
-              <p class="text-sm font-medium text-muted-foreground">Header Variables</p>
+              <p class="text-sm font-medium text-muted-foreground">{{ $t('templates.headerVariables') }}</p>
               <div v-for="paramName in headerVariables" :key="'header-' + paramName" class="flex items-center gap-2">
                 <span class="text-sm font-mono bg-muted px-2 py-1 rounded min-w-[80px] text-center">{{ formatVariableLabel(paramName) }}</span>
                 <input
                   type="text"
                   :value="getSampleValue('header', paramName)"
                   @input="setSampleValue('header', paramName, ($event.target as HTMLInputElement).value)"
-                  :placeholder="'Example for ' + paramName + '...'"
+                  :placeholder="$t('templates.exampleFor', { name: paramName }) + '...'"
                   class="flex-1 h-9 rounded-md border border-input bg-background px-3 text-sm"
                 />
               </div>
@@ -880,14 +909,14 @@ function formatPreview(text: string, samples: any[]): string {
 
             <!-- Body Variables -->
             <div v-if="bodyVariables.length > 0" class="space-y-2">
-              <p class="text-sm font-medium text-muted-foreground">Body Variables</p>
+              <p class="text-sm font-medium text-muted-foreground">{{ $t('templates.bodyVariables') }}</p>
               <div v-for="paramName in bodyVariables" :key="'body-' + paramName" class="flex items-center gap-2">
                 <span class="text-sm font-mono bg-muted px-2 py-1 rounded min-w-[80px] text-center">{{ formatVariableLabel(paramName) }}</span>
                 <input
                   type="text"
                   :value="getSampleValue('body', paramName)"
                   @input="setSampleValue('body', paramName, ($event.target as HTMLInputElement).value)"
-                  :placeholder="'Example for ' + paramName + '...'"
+                  :placeholder="$t('templates.exampleFor', { name: paramName }) + '...'"
                   class="flex-1 h-9 rounded-md border border-input bg-background px-3 text-sm"
                 />
               </div>
@@ -899,10 +928,9 @@ function formatPreview(text: string, samples: any[]): string {
             <div class="flex gap-3">
               <AlertCircle class="h-5 w-5 text-blue-400 light:text-blue-600 flex-shrink-0" />
               <div class="text-sm text-blue-200 light:text-blue-800">
-                <p class="font-medium">Template Submission</p>
+                <p class="font-medium">{{ $t('templates.templateSubmission') }}</p>
                 <p class="mt-1">
-                  This creates a local draft. After saving, click the <Send class="h-3 w-3 inline" /> publish button
-                  on the template card to submit it to Meta for approval.
+                  {{ $t('templates.templateSubmissionHint') }}
                 </p>
               </div>
             </div>
@@ -910,10 +938,10 @@ function formatPreview(text: string, samples: any[]): string {
         </div>
 
         <DialogFooter>
-          <Button variant="outline" size="sm" @click="isDialogOpen = false">Cancel</Button>
+          <Button variant="outline" size="sm" @click="isDialogOpen = false">{{ $t('common.cancel') }}</Button>
           <Button size="sm" @click="saveTemplate" :disabled="isSubmitting">
             <Loader2 v-if="isSubmitting" class="h-4 w-4 mr-2 animate-spin" />
-            {{ editingTemplate ? 'Update' : 'Create' }} Template
+            {{ editingTemplate ? $t('templates.updateTemplate') : $t('templates.createTemplate') }}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -923,7 +951,7 @@ function formatPreview(text: string, samples: any[]): string {
     <Dialog v-model:open="isPreviewOpen">
       <DialogContent class="max-w-md">
         <DialogHeader>
-          <DialogTitle>Template Preview</DialogTitle>
+          <DialogTitle>{{ $t('templates.templatePreview') }}</DialogTitle>
           <DialogDescription>
             {{ previewTemplate?.display_name || previewTemplate?.name }}
           </DialogDescription>
@@ -967,28 +995,28 @@ function formatPreview(text: string, samples: any[]): string {
           <!-- Template Info -->
           <div class="mt-4 space-y-2 text-sm">
             <div class="flex justify-between">
-              <span class="text-muted-foreground">Status:</span>
+              <span class="text-muted-foreground">{{ $t('templates.status') }}:</span>
               <span :class="['px-2 py-0.5 rounded text-xs font-medium', getStatusBadgeClass(previewTemplate.status)]">
                 {{ previewTemplate.status }}
               </span>
             </div>
             <div class="flex justify-between">
-              <span class="text-muted-foreground">Category:</span>
+              <span class="text-muted-foreground">{{ $t('templates.category') }}:</span>
               <span>{{ previewTemplate.category }}</span>
             </div>
             <div class="flex justify-between">
-              <span class="text-muted-foreground">Language:</span>
+              <span class="text-muted-foreground">{{ $t('templates.language') }}:</span>
               <span>{{ previewTemplate.language }}</span>
             </div>
             <div v-if="previewTemplate.meta_template_id" class="flex justify-between">
-              <span class="text-muted-foreground">Meta ID:</span>
+              <span class="text-muted-foreground">{{ $t('templates.metaId') }}:</span>
               <span class="font-mono text-xs">{{ previewTemplate.meta_template_id }}</span>
             </div>
           </div>
         </div>
 
         <DialogFooter>
-          <Button variant="outline" size="sm" @click="isPreviewOpen = false">Close</Button>
+          <Button variant="outline" size="sm" @click="isPreviewOpen = false">{{ $t('common.close') }}</Button>
           <Button
             v-if="previewTemplate?.status === 'DRAFT' || previewTemplate?.status === 'REJECTED'"
             size="sm"
@@ -997,45 +1025,36 @@ function formatPreview(text: string, samples: any[]): string {
           >
             <Loader2 v-if="publishingTemplateId === previewTemplate?.id" class="h-4 w-4 mr-2 animate-spin" />
             <Send v-else class="h-4 w-4 mr-2" />
-            {{ previewTemplate?.meta_template_id ? 'Republish to Meta' : 'Publish to Meta' }}
+            {{ previewTemplate?.meta_template_id ? $t('templates.republishToMeta') : $t('templates.publishToMeta') }}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
 
-    <!-- Delete Confirmation Dialog -->
-    <AlertDialog v-model:open="deleteDialogOpen">
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Delete Template</AlertDialogTitle>
-          <AlertDialogDescription>
-            Are you sure you want to delete "{{ templateToDelete?.display_name || templateToDelete?.name }}"? This action cannot be undone.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction @click="confirmDeleteTemplate">Delete</AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+    <DeleteConfirmDialog
+      v-model:open="deleteDialogOpen"
+      :title="$t('templates.deleteTemplate')"
+      :item-name="templateToDelete?.display_name || templateToDelete?.name"
+      @confirm="confirmDeleteTemplate"
+    />
 
     <!-- Publish Confirmation Dialog -->
     <AlertDialog v-model:open="publishDialogOpen">
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>{{ templateToPublish?.meta_template_id ? 'Republish' : 'Publish' }} Template</AlertDialogTitle>
+          <AlertDialogTitle>{{ templateToPublish?.meta_template_id ? $t('templates.republishTemplate') : $t('templates.publishTemplate') }}</AlertDialogTitle>
           <AlertDialogDescription>
             <template v-if="templateToPublish?.meta_template_id">
-              Republish "{{ templateToPublish?.display_name || templateToPublish?.name }}" to Meta? The updated template will go through approval again before becoming active.
+              {{ $t('templates.republishConfirm', { name: templateToPublish?.display_name || templateToPublish?.name }) }}
             </template>
             <template v-else>
-              Publish "{{ templateToPublish?.display_name || templateToPublish?.name }}" to Meta for approval? Once submitted, you won't be able to edit it until it's approved or rejected.
+              {{ $t('templates.publishConfirm', { name: templateToPublish?.display_name || templateToPublish?.name }) }}
             </template>
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction @click="confirmPublishTemplate">{{ templateToPublish?.meta_template_id ? 'Republish' : 'Publish' }}</AlertDialogAction>
+          <AlertDialogCancel>{{ $t('common.cancel') }}</AlertDialogCancel>
+          <AlertDialogAction @click="confirmPublishTemplate">{{ templateToPublish?.meta_template_id ? $t('templates.republish') : $t('templates.publish') }}</AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

@@ -1,13 +1,14 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Dialog,
   DialogContent,
@@ -15,18 +16,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger
 } from '@/components/ui/dialog'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
 import {
   Select,
   SelectContent,
@@ -34,16 +24,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip'
 import { chatbotService } from '@/services/api'
 import { toast } from 'vue-sonner'
-import { PageHeader } from '@/components/shared'
+import { PageHeader, DataTable, DeleteConfirmDialog, SearchInput, type Column } from '@/components/shared'
 import { getErrorMessage } from '@/lib/api-utils'
-import { Plus, Pencil, Trash2, Sparkles, FileText, Globe } from 'lucide-vue-next'
+import { Plus, Pencil, Trash2, Sparkles } from 'lucide-vue-next'
+import { useDebounceFn } from '@vueuse/core'
+
+const { t } = useI18n()
 
 interface ApiConfig {
   url: string
@@ -67,11 +55,29 @@ interface AIContext {
 
 const contexts = ref<AIContext[]>([])
 const isLoading = ref(true)
+const searchQuery = ref('')
 const isDialogOpen = ref(false)
 const isSubmitting = ref(false)
 const editingContext = ref<AIContext | null>(null)
 const deleteDialogOpen = ref(false)
 const contextToDelete = ref<AIContext | null>(null)
+
+// Pagination state
+const currentPage = ref(1)
+const totalItems = ref(0)
+const pageSize = 20
+
+const columns = computed<Column<AIContext>[]>(() => [
+  { key: 'name', label: t('aiContexts.name'), sortable: true },
+  { key: 'context_type', label: t('aiContexts.type'), sortable: true },
+  { key: 'trigger_keywords', label: t('aiContexts.keywords') },
+  { key: 'priority', label: t('aiContexts.priority'), sortable: true },
+  { key: 'status', label: t('aiContexts.status'), sortable: true, sortKey: 'enabled' },
+  { key: 'actions', label: t('aiContexts.actions'), align: 'right' },
+])
+
+const sortKey = ref('priority')
+const sortDirection = ref<'asc' | 'desc'>('desc')
 
 const formData = ref({
   name: '',
@@ -96,16 +102,37 @@ onMounted(async () => {
 async function fetchContexts() {
   isLoading.value = true
   try {
-    const response = await chatbotService.listAIContexts()
+    const response = await chatbotService.listAIContexts({
+      search: searchQuery.value || undefined,
+      page: currentPage.value,
+      limit: pageSize
+    })
     // API response is wrapped in { status: "success", data: { contexts: [...] } }
-    const data = response.data.data || response.data
+    const data = (response.data as any).data || response.data
     contexts.value = data.contexts || []
+    totalItems.value = data.total ?? contexts.value.length
   } catch (error) {
     console.error('Failed to load AI contexts:', error)
     contexts.value = []
   } finally {
     isLoading.value = false
   }
+}
+
+// Debounced search to avoid too many API calls
+const debouncedSearch = useDebounceFn(() => {
+  currentPage.value = 1
+  fetchContexts()
+}, 300)
+
+// Watch search query changes
+watch(searchQuery, () => {
+  debouncedSearch()
+})
+
+function handlePageChange(page: number) {
+  currentPage.value = page
+  fetchContexts()
 }
 
 function openCreateDialog() {
@@ -145,12 +172,12 @@ function openEditDialog(context: AIContext) {
 
 async function saveContext() {
   if (!formData.value.name.trim()) {
-    toast.error('Please enter a name')
+    toast.error(t('aiContexts.enterName'))
     return
   }
 
   if (formData.value.context_type === 'api' && !formData.value.api_url.trim()) {
-    toast.error('Please enter an API URL')
+    toast.error(t('aiContexts.enterApiUrl'))
     return
   }
 
@@ -162,7 +189,7 @@ async function saveContext() {
       try {
         headers = JSON.parse(formData.value.api_headers)
       } catch (e) {
-        toast.error('Invalid JSON format for headers')
+        toast.error(t('aiContexts.invalidHeaders'))
         isSubmitting.value = false
         return
       }
@@ -185,16 +212,16 @@ async function saveContext() {
 
     if (editingContext.value) {
       await chatbotService.updateAIContext(editingContext.value.id, data)
-      toast.success('AI context updated')
+      toast.success(t('common.updatedSuccess', { resource: t('resources.AIContext') }))
     } else {
       await chatbotService.createAIContext(data)
-      toast.success('AI context created')
+      toast.success(t('common.createdSuccess', { resource: t('resources.AIContext') }))
     }
 
     isDialogOpen.value = false
     await fetchContexts()
   } catch (error: any) {
-    toast.error(getErrorMessage(error, 'Failed to save AI context'))
+    toast.error(getErrorMessage(error, t('common.failedSave', { resource: t('resources.AIContext') })))
   } finally {
     isSubmitting.value = false
   }
@@ -210,12 +237,22 @@ async function confirmDeleteContext() {
 
   try {
     await chatbotService.deleteAIContext(contextToDelete.value.id)
-    toast.success('AI context deleted')
+    toast.success(t('common.deletedSuccess', { resource: t('resources.AIContext') }))
     deleteDialogOpen.value = false
     contextToDelete.value = null
     await fetchContexts()
   } catch (error: any) {
-    toast.error(getErrorMessage(error, 'Failed to delete AI context'))
+    toast.error(getErrorMessage(error, t('common.failedDelete', { resource: t('resources.AIContext') })))
+  }
+}
+
+async function toggleContext(context: AIContext) {
+  try {
+    await chatbotService.updateAIContext(context.id, { enabled: !context.enabled })
+    context.enabled = !context.enabled
+    toast.success(context.enabled ? t('common.enabledSuccess', { resource: t('resources.AIContext') }) : t('common.disabledSuccess', { resource: t('resources.AIContext') }))
+  } catch (error: any) {
+    toast.error(getErrorMessage(error, t('common.failedToggle', { resource: t('resources.AIContext') })))
   }
 }
 </script>
@@ -223,285 +260,254 @@ async function confirmDeleteContext() {
 <template>
   <div class="flex flex-col h-full bg-[#0a0a0b] light:bg-gray-50">
     <PageHeader
-      title="AI Contexts"
+      :title="$t('aiContexts.title')"
       :icon="Sparkles"
       icon-gradient="bg-gradient-to-br from-orange-500 to-amber-600 shadow-orange-500/20"
       back-link="/chatbot"
-      :breadcrumbs="[{ label: 'Chatbot', href: '/chatbot' }, { label: 'AI Contexts' }]"
+      :breadcrumbs="[{ label: $t('aiContexts.backToChatbot'), href: '/chatbot' }, { label: $t('nav.aiContexts') }]"
     >
       <template #actions>
-        <Dialog v-model:open="isDialogOpen">
-          <DialogTrigger as-child>
-            <Button variant="outline" size="sm" @click="openCreateDialog">
-              <Plus class="h-4 w-4 mr-2" />
-              Add Context
-            </Button>
-          </DialogTrigger>
-          <DialogContent class="max-w-2xl">
-            <DialogHeader>
-              <DialogTitle>{{ editingContext ? 'Edit' : 'Create' }} AI Context</DialogTitle>
-              <DialogDescription>
-                Add knowledge context that the AI can use when responding to messages.
-              </DialogDescription>
-            </DialogHeader>
-            <div class="grid gap-4 py-4 max-h-[60vh] overflow-y-auto">
-              <div class="grid grid-cols-2 gap-4">
-                <div class="space-y-2">
-                  <Label for="name">Name *</Label>
-                  <Input
-                    id="name"
-                    v-model="formData.name"
-                    placeholder="Product FAQ"
-                  />
-                </div>
-                <div class="space-y-2">
-                  <Label for="context_type">Type</Label>
-                  <Select v-model="formData.context_type">
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select type" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="static">Static Content</SelectItem>
-                      <SelectItem value="api">API Fetch</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              <div class="space-y-2">
-                <Label for="trigger_keywords">Trigger Keywords (comma-separated, optional)</Label>
-                <Input
-                  id="trigger_keywords"
-                  v-model="formData.trigger_keywords"
-                  placeholder="faq, help, info"
-                />
-                <p class="text-xs text-muted-foreground">
-                  Leave empty to always include this context, or specify keywords to include only when mentioned.
-                </p>
-              </div>
-
-              <!-- Content/Prompt Field - always shown -->
-              <div class="space-y-2">
-                <Label for="static_content">Content / Prompt</Label>
-                <Textarea
-                  id="static_content"
-                  v-model="formData.static_content"
-                  placeholder="Enter knowledge content or prompt for the AI..."
-                  :rows="6"
-                />
-                <p class="text-xs text-muted-foreground">
-                  This content will be provided to the AI as context for generating responses.
-                </p>
-              </div>
-
-              <!-- API Configuration Fields - shown only for API type -->
-              <div v-if="formData.context_type === 'api'" class="space-y-4 border-t pt-4">
-                <p class="text-sm font-medium">API Configuration</p>
-                <p class="text-xs text-muted-foreground">
-                  Data fetched from this API will be combined with the content above.
-                </p>
-
-                <div class="grid grid-cols-4 gap-4">
-                  <div class="col-span-1 space-y-2">
-                    <Label for="api_method">Method</Label>
-                    <Select v-model="formData.api_method">
-                      <SelectTrigger>
-                        <SelectValue placeholder="Method" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="GET">GET</SelectItem>
-                        <SelectItem value="POST">POST</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div class="col-span-3 space-y-2">
-                    <Label for="api_url">API URL *</Label>
-                    <Input
-                      id="api_url"
-                      v-model="formData.api_url"
-                      placeholder="https://api.example.com/context"
-                    />
-                  </div>
-                </div>
-                <p class="text-xs text-muted-foreground">
-                  Variables: <code class="bg-muted px-1 rounded">{{ variableExample('phone_number') }}</code>, <code class="bg-muted px-1 rounded">{{ variableExample('user_message') }}</code>
-                </p>
-
-                <div class="space-y-2">
-                  <Label for="api_headers">Headers (JSON, optional)</Label>
-                  <Textarea
-                    id="api_headers"
-                    v-model="formData.api_headers"
-                    placeholder='{"Authorization": "Bearer xxx"}'
-                    :rows="2"
-                  />
-                </div>
-
-                <div class="space-y-2">
-                  <Label for="api_response_path">Response Path (optional)</Label>
-                  <Input
-                    id="api_response_path"
-                    v-model="formData.api_response_path"
-                    placeholder="data.context"
-                  />
-                  <p class="text-xs text-muted-foreground">
-                    Dot-notation path to extract from JSON response.
-                  </p>
-                </div>
-              </div>
-
-              <div class="grid grid-cols-2 gap-4">
-                <div class="space-y-2">
-                  <Label for="priority">Priority</Label>
-                  <Input
-                    id="priority"
-                    v-model.number="formData.priority"
-                    type="number"
-                    min="1"
-                    max="100"
-                  />
-                  <p class="text-xs text-muted-foreground">Higher priority contexts are used first</p>
-                </div>
-                <div class="flex items-center gap-2 pt-8">
-                  <Switch
-                    id="enabled"
-                    :checked="formData.enabled"
-                    @update:checked="formData.enabled = $event"
-                  />
-                  <Label for="enabled">Enabled</Label>
-                </div>
-              </div>
-            </div>
-            <DialogFooter>
-              <Button variant="outline" size="sm" @click="isDialogOpen = false">Cancel</Button>
-              <Button size="sm" @click="saveContext" :disabled="isSubmitting">
-                {{ editingContext ? 'Update' : 'Create' }}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+        <Button variant="outline" size="sm" @click="openCreateDialog">
+          <Plus class="h-4 w-4 mr-2" />
+          {{ $t('aiContexts.addContext') }}
+        </Button>
       </template>
     </PageHeader>
 
-    <!-- Contexts List -->
     <ScrollArea class="flex-1">
-      <div class="p-6 grid gap-4 md:grid-cols-2">
-        <!-- Loading Skeleton -->
-        <template v-if="isLoading">
-          <div v-for="i in 4" :key="i" class="rounded-xl border border-white/[0.08] bg-white/[0.02] light:bg-white light:border-gray-200">
-            <div class="p-6">
-              <div class="flex items-start justify-between">
-                <div class="flex items-center gap-3">
-                  <Skeleton class="h-10 w-10 rounded-lg bg-white/[0.08] light:bg-gray-200" />
-                  <div>
-                    <Skeleton class="h-5 w-32 mb-1 bg-white/[0.08] light:bg-gray-200" />
-                    <Skeleton class="h-4 w-24 bg-white/[0.08] light:bg-gray-200" />
-                  </div>
-                </div>
-                <Skeleton class="h-5 w-16 bg-white/[0.08] light:bg-gray-200" />
-              </div>
-            </div>
-            <div class="px-6 pb-6">
-              <div class="flex flex-wrap gap-1 mb-3">
-                <Skeleton class="h-5 w-12 bg-white/[0.08] light:bg-gray-200" />
-                <Skeleton class="h-5 w-16 bg-white/[0.08] light:bg-gray-200" />
-              </div>
-              <Skeleton class="h-5 w-24 mb-3 bg-white/[0.08] light:bg-gray-200" />
-              <div class="flex gap-2">
-                <Skeleton class="h-8 w-8 rounded bg-white/[0.08] light:bg-gray-200" />
-                <Skeleton class="h-8 w-8 rounded bg-white/[0.08] light:bg-gray-200" />
-              </div>
-            </div>
-          </div>
-        </template>
-
-        <template v-else>
-        <div v-for="context in contexts" :key="context.id" class="rounded-xl border border-white/[0.08] bg-white/[0.02] light:bg-white light:border-gray-200">
-          <div class="p-6">
-            <div class="flex items-start justify-between">
-              <div class="flex items-center gap-3">
-                <div
-                  class="h-10 w-10 rounded-lg flex items-center justify-center shadow-lg"
-                  :class="context.context_type === 'api' ? 'bg-gradient-to-br from-blue-500 to-cyan-600 shadow-blue-500/20' : 'bg-gradient-to-br from-orange-500 to-amber-600 shadow-orange-500/20'"
-                >
-                  <Globe v-if="context.context_type === 'api'" class="h-5 w-5 text-white" />
-                  <FileText v-else class="h-5 w-5 text-white" />
-                </div>
+      <div class="p-6">
+        <div class="max-w-6xl mx-auto">
+          <Card>
+            <CardHeader>
+              <div class="flex items-center justify-between flex-wrap gap-4">
                 <div>
-                  <h3 class="text-base font-semibold text-white light:text-gray-900">{{ context.name }}</h3>
-                  <p class="text-sm text-white/50 light:text-gray-500">{{ context.context_type === 'api' ? 'API Fetch' : 'Static Content' }}</p>
+                  <CardTitle>{{ $t('aiContexts.yourContexts') }}</CardTitle>
+                  <CardDescription>{{ $t('aiContexts.yourContextsDesc') }}</CardDescription>
                 </div>
+                <SearchInput v-model="searchQuery" :placeholder="$t('aiContexts.searchContexts') + '...'" class="w-64" />
               </div>
-              <Badge
-                :class="context.enabled ? 'bg-emerald-500/20 text-emerald-400 border-transparent light:bg-emerald-100 light:text-emerald-700' : 'bg-white/[0.08] text-white/50 border-transparent light:bg-gray-100 light:text-gray-500'"
+            </CardHeader>
+            <CardContent>
+              <DataTable
+                :items="contexts"
+                :columns="columns"
+                :is-loading="isLoading"
+                :empty-icon="Sparkles"
+                :empty-title="searchQuery ? $t('aiContexts.noMatchingContexts') : $t('aiContexts.noContextsYet')"
+                :empty-description="searchQuery ? $t('aiContexts.noMatchingContextsDesc') : $t('aiContexts.noContextsYetDesc')"
+                v-model:sort-key="sortKey"
+                v-model:sort-direction="sortDirection"
+                server-pagination
+                :current-page="currentPage"
+                :total-items="totalItems"
+                :page-size="pageSize"
+                item-name="contexts"
+                @page-change="handlePageChange"
               >
-                {{ context.enabled ? 'Active' : 'Inactive' }}
-              </Badge>
-            </div>
-          </div>
-          <div class="px-6 pb-6">
-            <div class="flex flex-wrap gap-1 mb-3" v-if="context.trigger_keywords?.length">
-              <Badge v-for="kw in context.trigger_keywords" :key="kw" variant="outline" class="text-xs border-white/20 text-white/70 light:border-gray-200 light:text-gray-600">
-                {{ kw }}
-              </Badge>
-            </div>
-            <div class="flex flex-wrap gap-2 mb-3">
-              <Badge variant="secondary">Priority: {{ context.priority }}</Badge>
-            </div>
-            <div class="flex items-center justify-between">
-              <div class="flex gap-2">
-                <Tooltip>
-                  <TooltipTrigger as-child>
-                    <Button variant="ghost" size="icon" @click="openEditDialog(context)">
+                <template #cell-name="{ item: context }">
+                  <span class="font-medium">{{ context.name }}</span>
+                </template>
+                <template #cell-context_type="{ item: context }">
+                  <Badge
+                    :class="context.context_type === 'api'
+                      ? 'bg-blue-500/20 text-blue-400 border-transparent'
+                      : 'bg-orange-500/20 text-orange-400 border-transparent'"
+                    class="text-xs"
+                  >
+                    {{ context.context_type === 'api' ? $t('aiContexts.apiFetch') : $t('aiContexts.static') }}
+                  </Badge>
+                </template>
+                <template #cell-trigger_keywords="{ item: context }">
+                  <div class="flex flex-wrap gap-1">
+                    <Badge v-for="kw in context.trigger_keywords?.slice(0, 2)" :key="kw" variant="secondary" class="text-xs">
+                      {{ kw }}
+                    </Badge>
+                    <Badge v-if="context.trigger_keywords?.length > 2" variant="outline" class="text-xs">
+                      +{{ context.trigger_keywords.length - 2 }}
+                    </Badge>
+                    <span v-if="!context.trigger_keywords?.length" class="text-muted-foreground text-sm">{{ $t('aiContexts.always') }}</span>
+                  </div>
+                </template>
+                <template #cell-priority="{ item: context }">
+                  <span class="text-muted-foreground">{{ context.priority }}</span>
+                </template>
+                <template #cell-status="{ item: context }">
+                  <div class="flex items-center gap-2">
+                    <Switch :checked="context.enabled" @update:checked="toggleContext(context)" />
+                    <span class="text-sm text-muted-foreground">{{ context.enabled ? $t('aiContexts.active') : $t('aiContexts.inactive') }}</span>
+                  </div>
+                </template>
+                <template #cell-actions="{ item: context }">
+                  <div class="flex items-center justify-end gap-1">
+                    <Button variant="ghost" size="icon" class="h-8 w-8" @click="openEditDialog(context)">
                       <Pencil class="h-4 w-4" />
                     </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Edit context</TooltipContent>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger as-child>
-                    <Button variant="ghost" size="icon" @click="openDeleteDialog(context)">
-                      <Trash2 class="h-4 w-4 text-destructive" />
+                    <Button variant="ghost" size="icon" class="h-8 w-8 text-destructive" @click="openDeleteDialog(context)">
+                      <Trash2 class="h-4 w-4" />
                     </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Delete context</TooltipContent>
-                </Tooltip>
-              </div>
-            </div>
-          </div>
+                  </div>
+                </template>
+                <template #empty-action>
+                  <Button v-if="!searchQuery" variant="outline" size="sm" @click="openCreateDialog">
+                    <Plus class="h-4 w-4 mr-2" />
+                    {{ $t('aiContexts.addContext') }}
+                  </Button>
+                </template>
+              </DataTable>
+            </CardContent>
+          </Card>
         </div>
-
-        <div v-if="contexts.length === 0" class="col-span-full rounded-xl border border-white/[0.08] bg-white/[0.02] light:bg-white light:border-gray-200">
-          <div class="py-12 text-center text-white/50 light:text-gray-500">
-            <div class="h-16 w-16 rounded-xl bg-gradient-to-br from-orange-500 to-amber-600 flex items-center justify-center mx-auto mb-4 shadow-lg shadow-orange-500/20">
-              <Sparkles class="h-8 w-8 text-white" />
-            </div>
-            <p class="text-lg font-medium text-white light:text-gray-900">No AI contexts yet</p>
-            <p class="text-sm mb-4">Create knowledge contexts that the AI can use to answer questions.</p>
-            <Button variant="outline" size="sm" @click="openCreateDialog">
-              <Plus class="h-4 w-4 mr-2" />
-              Create Context
-            </Button>
-          </div>
-        </div>
-        </template>
       </div>
     </ScrollArea>
 
-    <!-- Delete Confirmation Dialog -->
-    <AlertDialog v-model:open="deleteDialogOpen">
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Delete AI Context</AlertDialogTitle>
-          <AlertDialogDescription>
-            Are you sure you want to delete "{{ contextToDelete?.name }}"? This action cannot be undone.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction @click="confirmDeleteContext">Delete</AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+    <!-- Create/Edit Dialog -->
+    <Dialog v-model:open="isDialogOpen">
+      <DialogContent class="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>{{ editingContext ? $t('aiContexts.editContext') : $t('aiContexts.createContext') }} {{ $t('aiContexts.aiContext') }}</DialogTitle>
+          <DialogDescription>
+            {{ $t('aiContexts.dialogDesc') }}
+          </DialogDescription>
+        </DialogHeader>
+        <div class="grid gap-4 py-4 max-h-[60vh] overflow-y-auto">
+          <div class="grid grid-cols-2 gap-4">
+            <div class="space-y-2">
+              <Label for="name">{{ $t('aiContexts.nameRequired') }}</Label>
+              <Input
+                id="name"
+                v-model="formData.name"
+                :placeholder="$t('aiContexts.namePlaceholder')"
+              />
+            </div>
+            <div class="space-y-2">
+              <Label for="context_type">{{ $t('aiContexts.contextType') }}</Label>
+              <Select v-model="formData.context_type">
+                <SelectTrigger>
+                  <SelectValue :placeholder="$t('aiContexts.selectType')" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="static">{{ $t('aiContexts.staticContent') }}</SelectItem>
+                  <SelectItem value="api">{{ $t('aiContexts.apiFetch') }}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div class="space-y-2">
+            <Label for="trigger_keywords">{{ $t('aiContexts.triggerKeywords') }}</Label>
+            <Input
+              id="trigger_keywords"
+              v-model="formData.trigger_keywords"
+              :placeholder="$t('aiContexts.triggerKeywordsPlaceholder')"
+            />
+            <p class="text-xs text-muted-foreground">
+              {{ $t('aiContexts.triggerKeywordsHint') }}
+            </p>
+          </div>
+
+          <div class="space-y-2">
+            <Label for="static_content">{{ $t('aiContexts.contentPrompt') }}</Label>
+            <Textarea
+              id="static_content"
+              v-model="formData.static_content"
+              :placeholder="$t('aiContexts.contentPlaceholder') + '...'"
+              :rows="6"
+            />
+            <p class="text-xs text-muted-foreground">
+              {{ $t('aiContexts.contentHint') }}
+            </p>
+          </div>
+
+          <div v-if="formData.context_type === 'api'" class="space-y-4 border-t pt-4">
+            <p class="text-sm font-medium">{{ $t('aiContexts.apiConfiguration') }}</p>
+            <p class="text-xs text-muted-foreground">{{ $t('aiContexts.apiConfigHint') }}</p>
+
+            <div class="grid grid-cols-4 gap-4">
+              <div class="col-span-1 space-y-2">
+                <Label for="api_method">{{ $t('aiContexts.method') }}</Label>
+                <Select v-model="formData.api_method">
+                  <SelectTrigger>
+                    <SelectValue :placeholder="$t('aiContexts.method')" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="GET">GET</SelectItem>
+                    <SelectItem value="POST">POST</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div class="col-span-3 space-y-2">
+                <Label for="api_url">{{ $t('aiContexts.apiUrl') }}</Label>
+                <Input
+                  id="api_url"
+                  v-model="formData.api_url"
+                  :placeholder="$t('aiContexts.apiUrlPlaceholder')"
+                />
+              </div>
+            </div>
+            <p class="text-xs text-muted-foreground">
+              {{ $t('aiContexts.variables') }}: <code class="bg-muted px-1 rounded">{{ variableExample('phone_number') }}</code>, <code class="bg-muted px-1 rounded">{{ variableExample('user_message') }}</code>
+            </p>
+
+            <div class="space-y-2">
+              <Label for="api_headers">{{ $t('aiContexts.headersOptional') }}</Label>
+              <Textarea
+                id="api_headers"
+                v-model="formData.api_headers"
+                :placeholder="$t('aiContexts.headersPlaceholder')"
+                :rows="2"
+              />
+              <p class="text-xs text-muted-foreground">
+                {{ $t('aiContexts.headersHint') }}
+              </p>
+            </div>
+
+            <div class="space-y-2">
+              <Label for="api_response_path">{{ $t('aiContexts.responsePath') }}</Label>
+              <Input
+                id="api_response_path"
+                v-model="formData.api_response_path"
+                :placeholder="$t('aiContexts.responsePathPlaceholder')"
+              />
+              <p class="text-xs text-muted-foreground">{{ $t('aiContexts.responsePathHint') }}</p>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-4">
+            <div class="space-y-2">
+              <Label for="priority">{{ $t('aiContexts.priorityLabel') }}</Label>
+              <Input
+                id="priority"
+                v-model.number="formData.priority"
+                type="number"
+                min="1"
+                max="100"
+              />
+              <p class="text-xs text-muted-foreground">{{ $t('aiContexts.priorityHint') }}</p>
+            </div>
+            <div class="flex items-center gap-2 pt-8">
+              <Switch
+                id="enabled"
+                :checked="formData.enabled"
+                @update:checked="formData.enabled = $event"
+              />
+              <Label for="enabled">{{ $t('aiContexts.enabled') }}</Label>
+            </div>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" size="sm" @click="isDialogOpen = false">{{ $t('common.cancel') }}</Button>
+          <Button size="sm" @click="saveContext" :disabled="isSubmitting">
+            {{ editingContext ? $t('common.update') : $t('common.create') }}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <DeleteConfirmDialog
+      v-model:open="deleteDialogOpen"
+      :title="$t('aiContexts.deleteContext')"
+      :item-name="contextToDelete?.name"
+      @confirm="confirmDeleteContext"
+    />
   </div>
 </template>

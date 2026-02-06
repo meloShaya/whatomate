@@ -51,8 +51,23 @@ func (a *App) ListWebhooks(r *fastglue.Request) error {
 		return r.SendErrorEnvelope(fasthttp.StatusUnauthorized, "Unauthorized", nil, "")
 	}
 
+	pg := parsePagination(r)
+	search := string(r.RequestCtx.QueryArgs().Peek("search"))
+
+	query := a.DB.Where("organization_id = ?", orgID)
+
+	// Apply search filter - search by name or URL (case-insensitive)
+	if search != "" {
+		searchPattern := "%" + search + "%"
+		query = query.Where("name ILIKE ? OR url ILIKE ?", searchPattern, searchPattern)
+	}
+
+	var total int64
+	query.Model(&models.Webhook{}).Count(&total)
+
 	var webhooks []models.Webhook
-	if err := a.DB.Where("organization_id = ?", orgID).Order("created_at DESC").Find(&webhooks).Error; err != nil {
+	if err := pg.Apply(query.Model(&models.Webhook{}).Order("created_at DESC")).
+		Find(&webhooks).Error; err != nil {
 		a.Log.Error("Failed to list webhooks", "error", err)
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to list webhooks", nil, "")
 	}
@@ -62,9 +77,12 @@ func (a *App) ListWebhooks(r *fastglue.Request) error {
 		result[i] = webhookToResponse(wh)
 	}
 
-	return r.SendEnvelope(map[string]interface{}{
+	return r.SendEnvelope(map[string]any{
 		"webhooks":         result,
 		"available_events": AvailableWebhookEvents,
+		"total":            total,
+		"page":             pg.Page,
+		"limit":            pg.Limit,
 	})
 }
 
@@ -96,8 +114,8 @@ func (a *App) CreateWebhook(r *fastglue.Request) error {
 	}
 
 	var req WebhookRequest
-	if err := r.Decode(&req, "json"); err != nil {
-		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "Invalid request body", nil, "")
+	if err := a.decodeRequest(r, &req); err != nil {
+		return nil
 	}
 
 	if req.Name == "" || req.URL == "" {
@@ -153,8 +171,8 @@ func (a *App) UpdateWebhook(r *fastglue.Request) error {
 	}
 
 	var req WebhookRequest
-	if err := r.Decode(&req, "json"); err != nil {
-		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, "Invalid request body", nil, "")
+	if err := a.decodeRequest(r, &req); err != nil {
+		return nil
 	}
 
 	if req.Name != "" {
