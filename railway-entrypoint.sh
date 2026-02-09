@@ -1,49 +1,83 @@
 #!/bin/sh
 set -e
 
-echo "Setting up Railway configuration..."
+# Ensure we're in app directory
+cd /app || exit 1
 
-echo "[server]" > config.toml
-echo "port = ${PORT:-8080}" >> config.toml
-echo "" >> config.toml
+CONFIG="/app/config.toml"
 
-echo "[database]" >> config.toml
-echo "host = \"${DATABASE_HOST:-localhost}\"" >> config.toml
-echo "port = ${DATABASE_PORT:-5432}" >> config.toml
-echo "user = \"${DATABASE_USER:-whatomate}\"" >> config.toml
-echo "password = \"${DATABASE_PASSWORD:-whatomate}\"" >> config.toml
-echo "name = \"${DATABASE_NAME:-whatomate}\"" >> config.toml
-echo "ssl_mode = \"require\"" >> config.toml
-echo "" >> config.toml
+echo "Setting up Railway configuration at ${CONFIG}..."
 
-echo "[redis]" >> config.toml
-echo "host = \"${REDIS_URL_HOST:-localhost}\"" >> config.toml
-echo "port = ${REDIS_URL_PORT_INT:-6379}" >> config.toml
-echo "password = \"${REDIS_URL_PASSWORD:-}\"" >> config.toml
-echo "db = 0" >> config.toml
-echo "" >> config.toml
+# Ensure uploads directory exists
+mkdir -p ./uploads
 
-echo "[jwt]" >> config.toml
-echo "secret = \"${WHATOMATE_JWT_SECRET:-your-super-secret-jwt-key-change-in-production}\"" >> config.toml
-echo "" >> config.toml
+# Generate config.toml with environment fallbacks
+cat > "${CONFIG}" <<EOF
+[server]
+host = "${WHATOMATE_SERVER_HOST:-0.0.0.0}"
+port = ${PORT:-8080}
 
-echo "[app]" >> config.toml
-echo "environment = \"${WHATOMATE_ENV:-production}\"" >> config.toml
-echo "debug = ${WHATOMATE_DEBUG:-false}" >> config.toml
-echo "" >> config.toml
+[database]
+host = "${DATABASE_HOST:-localhost}"
+port = ${DATABASE_PORT:-5432}
+user = "${DATABASE_USER:-whatomate}"
+password = "${DATABASE_PASSWORD:-whatomate}"
+name = "${DATABASE_NAME:-whatomate}"
+ssl_mode = "require"
+max_open_conns = 25
+max_idle_conns = 5
+conn_max_lifetime = 300
 
-echo "[default_admin]" >> config.toml
-echo "email = \"${WHATOMATE_DEFAULT_ADMIN_EMAIL:-admin@example.com}\"" >> config.toml
-echo "password = \"${WHATOMATE_DEFAULT_ADMIN_PASSWORD:-admin}\"" >> config.toml
-echo "full_name = \"${WHATOMATE_DEFAULT_ADMIN_FULL_NAME:-Admin User}\"" >> config.toml
-echo "" >> config.toml
+[redis]
+host = "${REDIS_URL_HOST:-localhost}"
+port = ${REDIS_URL_PORT_INT:-6379}
+password = "${REDIS_URL_PASSWORD:-}"
+db = 0
 
-echo "[storage]" >> config.toml
-echo "type = \"local\"" >> config.toml
-echo "local_path = \"./uploads\"" >> config.toml
+[jwt]
+secret = "${WHATOMATE_JWT_SECRET:-your-super-secret-jwt-key-change-in-production}"
+access_expiry_mins = 15
+refresh_expiry_days = 7
 
-echo "Running database migrations..."
-./whatomate server -migrate -config=config.toml
+[app]
+name = "Whatomate"
+environment = "${WHATOMATE_ENV:-production}"
+debug = ${WHATOMATE_DEBUG:-false}
+
+[default_admin]
+email = "${WHATOMATE_DEFAULT_ADMIN_EMAIL:-admin@example.com}"
+password = "${WHATOMATE_DEFAULT_ADMIN_PASSWORD:-admin}"
+full_name = "${WHATOMATE_DEFAULT_ADMIN_FULL_NAME:-Admin User}"
+
+[storage]
+type = "local"
+local_path = "./uploads"
+EOF
+
+echo "Config written. Contents:"
+sed -n '1,200p' "${CONFIG}"
+
+# Run migrations with simple retry loop in case DB isn't ready yet.
+MAX_TRIES=10
+TRY=1
+SLEEP=5
+
+echo "Running database migrations (up to ${MAX_TRIES} attempts)..."
+while [ $TRY -le $MAX_TRIES ]; do
+  if ./whatomate server -migrate -config="${CONFIG}"; then
+    echo "Migrations succeeded on attempt ${TRY}."
+    break
+  else
+    echo "Migrations failed on attempt ${TRY}. Retrying in ${SLEEP}s..."
+    TRY=$((TRY + 1))
+    sleep ${SLEEP}
+  fi
+done
+
+if [ $TRY -gt $MAX_TRIES ]; then
+  echo "Migrations failed after ${MAX_TRIES} attempts. Exiting."
+  exit 1
+fi
 
 echo "Starting Whatomate server..."
-exec ./whatomate server -config=config.toml
+exec ./whatomate server -config="${CONFIG}"

@@ -1,5 +1,6 @@
 # Railway-compatible Configuration for Whatomate
-# This file uses environment variables that will be set by Railway
+# This is a sample template — runtime configuration will be generated into /app/config.toml by the entrypoint
+# and populated from Railway-provided env vars.
 
 [app]
 name = "Whatomate"
@@ -11,33 +12,31 @@ host = "0.0.0.0"
 port = 8080  # Will be overridden by WHATOMATE_SERVER_PORT or PORT
 
 [database]
-host = "${DATABASE_HOST}"  # Set by Railway PostgreSQL addon
-port = "${DATABASE_PORT_INT}"  # Set by Railway PostgreSQL addon
-user = "${DATABASE_USER}"  # Set by Railway PostgreSQL addon
-password = "${DATABASE_PASSWORD}"  # Set by Railway PostgreSQL addon
-name = "${DATABASE_NAME}"  # Set by Railway PostgreSQL addon
-ssl_mode = "require"  # Railway requires SSL for database connections
+host = "${DATABASE_HOST}"
+port = "${DATABASE_PORT_INT}"
+user = "${DATABASE_USER}"
+password = "${DATABASE_PASSWORD}"
+name = "${DATABASE_NAME}"
+ssl_mode = "require"
 max_open_conns = 25
 max_idle_conns = 5
 conn_max_lifetime = 300
 
 [redis]
-host = "${REDIS_URL_HOST}"  # Set by Railway Redis addon
-port = "${REDIS_URL_PORT_INT}"  # Set by Railway Redis addon
-password = "${REDIS_URL_PASSWORD}"  # Set by Railway Redis addon
+host = "${REDIS_URL_HOST}"
+port = "${REDIS_URL_PORT_INT}"
+password = "${REDIS_URL_PASSWORD}"
 db = 0
 
 [jwt]
-secret = "${WHATOMATE_JWT_SECRET}"  # Required - set in Railway dashboard
+secret = "${WHATOMATE_JWT_SECRET}"
 access_expiry_mins = 15
 refresh_expiry_days = 7
 
 [storage]
-type = "local"  # For Railway deployment, using local storage
+type = "local"
 local_path = "./uploads"
-# Note: For production, consider using S3 or similar object storage
 
-# Default admin credentials (only used during initial setup when no users exist)
 [default_admin]
 email = "${WHATOMATE_DEFAULT_ADMIN_EMAIL}"
 password = "${WHATOMATE_DEFAULT_ADMIN_PASSWORD}"
