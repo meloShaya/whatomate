@@ -11,34 +11,33 @@ echo "Setting up Railway configuration at ${CONFIG}..."
 # Ensure uploads directory exists
 mkdir -p ./uploads
 
-# Prefer DATABASE_URL (Railway standard)
-if [ -n "$DATABASE_URL" ]; then
-  DB_URL="$DATABASE_URL"
-else
-  # Fallback to PG* variables
-  DB_URL="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}?sslmode=require"
-fi
-
-# Redis
-if [ -n "$REDIS_URL" ]; then
-  REDIS_CONN="$REDIS_URL"
-else
-  REDIS_CONN="redis://${REDIS_URL_HOST:-localhost}:${REDIS_URL_PORT_INT:-6379}"
-fi
-
+# Write config using Railway env vars
 cat > "${CONFIG}" <<EOF
 [server]
 host = "0.0.0.0"
 port = ${PORT:-8080}
 
 [database]
-url = "${DB_URL}"
+host = "${PGHOST}"
+port = "${PGPORT}"
+user = "${PGUSER}"
+password = "${PGPASSWORD}"
+name = "${PGDATABASE}"
+ssl_mode = "require"
+max_open_conns = 25
+max_idle_conns = 5
+conn_max_lifetime = 300
 
 [redis]
-url = "${REDIS_CONN}"
+host = "${REDISHOST}"
+port = "${REDISPORT}"
+password = "${REDISPASSWORD}"
+db = 0
 
 [jwt]
 secret = "${WHATOMATE_JWT_SECRET}"
+access_expiry_mins = 15
+refresh_expiry_days = 7
 
 [app]
 name = "Whatomate"
@@ -58,7 +57,7 @@ EOF
 echo "Config written. Contents:"
 sed -n '1,200p' "${CONFIG}"
 
-# Run migrations with simple retry loop in case DB isn't ready yet.
+# Run migrations with retry loop in case DB isn't ready yet.
 MAX_TRIES=10
 TRY=1
 SLEEP=5
