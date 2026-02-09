@@ -83,5 +83,7 @@ if [ $TRY -gt $MAX_TRIES ]; then
   exit 1
 fi
 
+# 
+
 echo "Starting Whatomate server..."
 exec ./whatomate server -config="${CONFIG}"
