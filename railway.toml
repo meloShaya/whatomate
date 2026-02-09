@@ -1,0 +1,25 @@
+# Railway Configuration for Whatomate
+
+[build]
+builder = "dockerfile"
+dockerfilePath = "railway.Dockerfile"
+
+[deploy]
+numReplicas = 1
+region = "auto"
+ephemeral = false
+
+[variables]
+WHATOMATE_ENV = { default = "production" }
+WHATOMATE_DEBUG = { default = "false" }
+WHATOMATE_SERVER_HOST = { default = "0.0.0.0" }
+WHATOMATE_JWT_SECRET = { description = "JWT Secret for authentication. Generate a strong random key.", required = true }
+WHATOMATE_DEFAULT_ADMIN_EMAIL = { description = "Default admin email", default = "admin@example.com" }
+WHATOMATE_DEFAULT_ADMIN_PASSWORD = { description = "Default admin password", default = "admin" }
+WHATOMATE_DEFAULT_ADMIN_FULL_NAME = { description = "Default admin full name", default = "Admin User" }
+
+[[plugins]]
+name = "postgresql"
+
+[[plugins]]
+name = "redis"

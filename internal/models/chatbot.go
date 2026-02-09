@@ -190,6 +190,7 @@ type ChatbotFlowStep struct {
 	SkipCondition   string     `gorm:"type:text" json:"skip_condition"`
 	RetryOnInvalid  bool       `gorm:"default:true" json:"retry_on_invalid"`
 	MaxRetries      int        `gorm:"default:3" json:"max_retries"`
+	TerminatesFlow  bool       `gorm:"default:false" json:"terminates_flow"`
 
 	// Relations
 	Flow     *ChatbotFlow `gorm:"foreignKey:FlowID" json:"flow,omitempty"`

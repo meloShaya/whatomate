@@ -988,7 +988,7 @@ func (a *App) processFlowResponse(account *models.WhatsAppAccount, session *mode
 	}
 
 	// Move to next step or complete flow
-	if nextStepName == "" {
+	if nextStepName == "" || currentStep.TerminatesFlow {
 		a.completeFlow(account, session, contact, flow)
 		return
 	}
@@ -1269,9 +1269,15 @@ func (a *App) sendStepWithSkipCheck(account *models.WhatsAppAccount, session *mo
 	time.Sleep(3 * time.Second)
 	a.sendStepMessage(account, session, contact, step)
 
+	// If step terminates flow, stop here
+	if step.TerminatesFlow {
+		a.Log.Info("Step terminates flow", "step", step.StepName)
+		a.completeFlow(account, session, contact, flow)
+		return
+	}
+
 	// If input type is "none", automatically advance to next step without waiting for user input
 	if step.InputType == models.InputTypeNone {
-
 		// Find next step
 		nextStepName := step.NextStep
 		if nextStepName == "" {
@@ -1530,6 +1536,7 @@ func (a *App) sendStepMessage(account *models.WhatsAppAccount, session *models.C
 		}
 		a.logSessionMessage(session.ID, models.DirectionOutgoing, message, step.StepName)
 	}
+
 }
 
 // ApiResponse represents a response from an external API that may include buttons

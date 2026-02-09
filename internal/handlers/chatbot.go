@@ -719,6 +719,7 @@ type FlowStepRequest struct {
 	SkipCondition   string                   `json:"skip_condition"`
 	RetryOnInvalid  bool                     `json:"retry_on_invalid"`
 	MaxRetries      int                      `json:"max_retries"`
+	TerminatesFlow  bool                     `json:"terminates_flow"`
 }
 
 // CreateChatbotFlow creates a new chatbot flow
@@ -804,6 +805,7 @@ func (a *App) CreateChatbotFlow(r *fastglue.Request) error {
 			SkipCondition:   stepReq.SkipCondition,
 			RetryOnInvalid:  stepReq.RetryOnInvalid,
 			MaxRetries:      stepReq.MaxRetries,
+			TerminatesFlow:  stepReq.TerminatesFlow,
 		}
 		if step.MessageType == "" {
 			step.MessageType = models.FlowStepTypeText
@@ -965,6 +967,7 @@ func (a *App) UpdateChatbotFlow(r *fastglue.Request) error {
 				SkipCondition:   stepReq.SkipCondition,
 				RetryOnInvalid:  stepReq.RetryOnInvalid,
 				MaxRetries:      stepReq.MaxRetries,
+				TerminatesFlow:  stepReq.TerminatesFlow,
 			}
 			if step.MessageType == "" {
 				step.MessageType = models.FlowStepTypeText

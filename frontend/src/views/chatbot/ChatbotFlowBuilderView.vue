@@ -100,6 +100,7 @@ interface FlowStep {
 	retry_on_invalid: boolean;
 	max_retries: number;
 	skip_condition: string;
+	terminates_flow: boolean;
 }
 
 interface WebhookConfig {
@@ -266,6 +267,7 @@ const defaultStep: FlowStep = {
 	retry_on_invalid: true,
 	max_retries: 3,
 	skip_condition: "",
+	terminates_flow: false,
 };
 
 const formData = ref({
@@ -554,6 +556,7 @@ async function loadFlow(id: string) {
 						s.retry_on_invalid ?? s.RetryOnInvalid ?? true,
 					max_retries: s.max_retries ?? s.MaxRetries ?? 3,
 					skip_condition: s.skip_condition || s.SkipCondition || "",
+					terminates_flow: s.terminates_flow ?? s.TerminatesFlow ?? false,
 				}),
 			),
 		};
@@ -2622,6 +2625,22 @@ function confirmCancel() {
 									<p class="text-xs text-muted-foreground">
 										Skip this step if condition is true
 									</p>
+								</div>
+
+								<div class="flex items-center justify-between pt-2 border-t">
+									<div class="space-y-0.5">
+										<Label class="text-xs">Terminate Flow Here</Label>
+										<p class="text-xs text-muted-foreground">
+											End the flow at this step regardless of next steps
+										</p>
+									</div>
+									<Switch
+										:checked="selectedStep.terminates_flow"
+										@update:checked="
+											selectedStep.terminates_flow =
+												$event
+										"
+									/>
 								</div>
 							</CollapsibleContent>
 						</Collapsible>

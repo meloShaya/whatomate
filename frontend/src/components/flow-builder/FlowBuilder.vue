@@ -242,6 +242,12 @@ function addComponent(type: string) {
         payload: {}
       }
       break
+    case 'Termination':
+      component.name = generateFieldName(type)
+      component.label = 'Termination Step'
+      component.text = 'Flow completed'
+      component.terminates_flow = true
+      break
   }
 
   selectedScreen.value.layout.children.push(component)
@@ -330,11 +336,12 @@ function sanitizeFlowForMeta(flowData: { screens: FlowScreen[] }): { screens: an
         type: screen.layout.type,
         children: screen.layout.children.map(comp => {
           // Create a copy without the 'id' if component type doesn't support it
-          const { id, ...rest } = comp
+          // Also remove the 'terminates_flow' property as it's backend-specific
+          const { id, terminates_flow, ...rest } = comp
           if (componentsWithoutId.includes(comp.type)) {
             return rest
           }
-          return comp
+          return { ...rest, id } // Only include id if component type supports it
         })
       }
     }))
@@ -555,6 +562,20 @@ defineExpose({
                   <Button class="w-full">{{ comp.label }}</Button>
                 </template>
 
+                <!-- Termination -->
+                <template v-else-if="comp.type === 'Termination'">
+                  <div class="p-3 rounded-md border-2 border-green-500 bg-green-50">
+                    <div class="flex items-center gap-2">
+                      <Settings2 class="h-4 w-4 text-green-600" />
+                      <span class="font-medium text-green-800">{{ comp.label }}</span>
+                    </div>
+                    <p class="text-sm text-green-600 mt-1">{{ comp.text }}</p>
+                    <div class="mt-2 text-xs text-green-700 bg-green-100 p-2 rounded">
+                      This step will terminate the flow
+                    </div>
+                  </div>
+                </template>
+
                 <!-- Generic fallback -->
                 <template v-else>
                   <div class="flex items-center gap-2 text-sm text-muted-foreground">
@@ -755,6 +776,15 @@ defineExpose({
                 </SelectContent>
               </Select>
             </div>
+          </div>
+
+          <!-- Termination option for all components -->
+          <div class="flex items-center justify-between pt-4 border-t">
+            <Label class="text-xs">Terminate Flow Here</Label>
+            <Switch
+              :checked="selectedComponent.terminates_flow"
+              @update:checked="updateComponentProperty('terminates_flow', $event)"
+            />
           </div>
         </div>
         <div v-else class="p-4 text-center text-sm text-muted-foreground">
