@@ -11,6 +11,13 @@ echo "Setting up Railway configuration at ${CONFIG}..."
 # Ensure uploads directory exists
 mkdir -p ./uploads
 
+# Prefer full REDIS_URL (e.g., from Upstash); fallback to constructing from separate vars
+if [ -n "$REDIS_URL" ]; then
+  REDIS_CONN="$REDIS_URL"
+else
+  REDIS_CONN="redis://${REDISPASSWORD:+${REDISPASSWORD}@}${REDISHOST:-localhost}:${REDISPORT:-6379}/0"
+fi
+
 # Write config using Railway env vars
 cat > "${CONFIG}" <<EOF
 [server]
@@ -29,10 +36,7 @@ max_idle_conns = 5
 conn_max_lifetime = 300
 
 [redis]
-host = "${REDISHOST}"
-port = "${REDISPORT}"
-password = "${REDISPASSWORD}"
-db = 0
+url = "${REDIS_CONN}"
 
 [jwt]
 secret = "${WHATOMATE_JWT_SECRET}"
