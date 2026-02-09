@@ -11,33 +11,34 @@ echo "Setting up Railway configuration at ${CONFIG}..."
 # Ensure uploads directory exists
 mkdir -p ./uploads
 
-# Generate config.toml with environment fallbacks
+# Prefer DATABASE_URL (Railway standard)
+if [ -n "$DATABASE_URL" ]; then
+  DB_URL="$DATABASE_URL"
+else
+  # Fallback to PG* variables
+  DB_URL="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}?sslmode=require"
+fi
+
+# Redis
+if [ -n "$REDIS_URL" ]; then
+  REDIS_CONN="$REDIS_URL"
+else
+  REDIS_CONN="redis://${REDIS_URL_HOST:-localhost}:${REDIS_URL_PORT_INT:-6379}"
+fi
+
 cat > "${CONFIG}" <<EOF
 [server]
-host = "${WHATOMATE_SERVER_HOST:-0.0.0.0}"
+host = "0.0.0.0"
 port = ${PORT:-8080}
 
 [database]
-host = "${DATABASE_HOST:-localhost}"
-port = ${DATABASE_PORT:-5432}
-user = "${DATABASE_USER:-whatomate}"
-password = "${DATABASE_PASSWORD:-whatomate}"
-name = "${DATABASE_NAME:-whatomate}"
-ssl_mode = "require"
-max_open_conns = 25
-max_idle_conns = 5
-conn_max_lifetime = 300
+url = "${DB_URL}"
 
 [redis]
-host = "${REDIS_URL_HOST:-localhost}"
-port = ${REDIS_URL_PORT_INT:-6379}
-password = "${REDIS_URL_PASSWORD:-}"
-db = 0
+url = "${REDIS_CONN}"
 
 [jwt]
-secret = "${WHATOMATE_JWT_SECRET:-your-super-secret-jwt-key-change-in-production}"
-access_expiry_mins = 15
-refresh_expiry_days = 7
+secret = "${WHATOMATE_JWT_SECRET}"
 
 [app]
 name = "Whatomate"

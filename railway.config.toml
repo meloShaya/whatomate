@@ -12,11 +12,11 @@ host = "0.0.0.0"
 port = 8080  # Will be overridden by WHATOMATE_SERVER_PORT or PORT
 
 [database]
-host = "${DATABASE_HOST}"
-port = "${DATABASE_PORT_INT}"
-user = "${DATABASE_USER}"
-password = "${DATABASE_PASSWORD}"
-name = "${DATABASE_NAME}"
+host = "${PGHOST}"
+port = "${PGPORT}"
+user = "${PGUSER}"
+password = "${PGPASSWORD}"
+name = "${PGDATABASE}"
 ssl_mode = "require"
 max_open_conns = 25
 max_idle_conns = 5

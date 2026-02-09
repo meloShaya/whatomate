@@ -37,6 +37,7 @@ type ServerConfig struct {
 }
 
 type DatabaseConfig struct {
+	URL             string `koanf:"url"`
 	Host            string `koanf:"host"`
 	Port            int    `koanf:"port"`
 	User            string `koanf:"user"`
@@ -49,6 +50,7 @@ type DatabaseConfig struct {
 }
 
 type RedisConfig struct {
+	URL      string `koanf:"url"`
 	Host     string `koanf:"host"`
 	Port     int    `koanf:"port"`
 	Password string `koanf:"password"`
