@@ -41,47 +41,9 @@ RUN apk add --no-cache ca-certificates tzdata
 # Copy binary from builder
 COPY --from=builder /app/whatomate .
 
-# Create a default config file that uses environment variables
-RUN apk add --no-cache curl && \
-    echo '#!/bin/sh' > /entrypoint.sh && \
-    echo 'echo "Setting up Railway configuration..."' >> /entrypoint.sh && \
-    echo 'echo "[server]" > config.toml' >> /entrypoint.sh && \
-    echo "echo \"port = \${PORT:-8080}\" >> config.toml" >> /entrypoint.sh && \
-    echo 'echo "" >> config.toml' >> /entrypoint.sh && \
-    echo 'echo "[database]" >> config.toml' >> /entrypoint.sh && \
-    echo "echo \"host = \\\\"\${DATABASE_HOST:-localhost}\\\"\" >> config.toml" >> /entrypoint.sh && \
-    echo "echo \"port = \${DATABASE_PORT:-5432}\" >> config.toml" >> /entrypoint.sh && \
-    echo "echo \"user = \\\\"\${DATABASE_USER:-whatomate}\\\"\" >> config.toml" >> /entrypoint.sh && \
-    echo "echo \"password = \\\\"\${DATABASE_PASSWORD:-whatomate}\\\"\" >> config.toml" >> /entrypoint.sh && \
-    echo "echo \"name = \\\\"\${DATABASE_NAME:-whatomate}\\\"\" >> config.toml" >> /entrypoint.sh && \
-    echo "echo \"ssl_mode = \\\"require\\\"\" >> config.toml" >> /entrypoint.sh && \
-    echo 'echo "" >> config.toml' >> /entrypoint.sh && \
-    echo 'echo "[redis]" >> config.toml' >> /entrypoint.sh && \
-    echo "echo \"host = \\\\"\${REDIS_URL_HOST:-localhost}\\\"\" >> config.toml" >> /entrypoint.sh && \
-    echo "echo \"port = \${REDIS_URL_PORT_INT:-6379}\" >> config.toml" >> /entrypoint.sh && \
-    echo "echo \"password = \\\\"\${REDIS_URL_PASSWORD:-}\\\"\" >> config.toml" >> /entrypoint.sh && \
-    echo "echo \"db = 0\" >> config.toml" >> /entrypoint.sh && \
-    echo 'echo "" >> config.toml' >> /entrypoint.sh && \
-    echo 'echo "[jwt]" >> config.toml' >> /entrypoint.sh && \
-    echo "echo \"secret = \\\\"\${WHATOMATE_JWT_SECRET:-your-super-secret-jwt-key-change-in-production}\\\"\" >> config.toml" >> /entrypoint.sh && \
-    echo 'echo "" >> config.toml' >> /entrypoint.sh && \
-    echo 'echo "[app]" >> config.toml' >> /entrypoint.sh && \
-    echo "echo \"environment = \\\"\${WHATOMATE_ENV:-production}\\\"\" >> config.toml" >> /entrypoint.sh && \
-    echo "echo \"debug = \${WHATOMATE_DEBUG:-false}\" >> config.toml" >> /entrypoint.sh && \
-    echo 'echo "" >> config.toml' >> /entrypoint.sh && \
-    echo 'echo "[default_admin]" >> config.toml' >> /entrypoint.sh && \
-    echo "echo \"email = \\\\"\${WHATOMATE_DEFAULT_ADMIN_EMAIL:-admin@example.com}\\\"\" >> config.toml" >> /entrypoint.sh && \
-    echo "echo \"password = \\\\"\${WHATOMATE_DEFAULT_ADMIN_PASSWORD:-admin}\\\"\" >> config.toml" >> /entrypoint.sh && \
-    echo "echo \"full_name = \\\\"\${WHATOMATE_DEFAULT_ADMIN_FULL_NAME:-Admin User}\\\"\" >> config.toml" >> /entrypoint.sh && \
-    echo 'echo "" >> config.toml' >> /entrypoint.sh && \
-    echo 'echo "[storage]" >> config.toml' >> /entrypoint.sh && \
-    echo 'echo "type = \\"local\\"" >> config.toml' >> /entrypoint.sh && \
-    echo 'echo "local_path = \\"./uploads\\"" >> config.toml' >> /entrypoint.sh && \
-    echo 'echo "Running database migrations..."' >> /entrypoint.sh && \
-    echo './whatomate server -migrate -config=config.toml' >> /entrypoint.sh && \
-    echo 'echo "Starting Whatomate server..."' >> /entrypoint.sh && \
-    echo 'exec ./whatomate server -config=config.toml' >> /entrypoint.sh && \
-    chmod +x /entrypoint.sh
+# Copy entrypoint script
+COPY railway-entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 # Create uploads directory
 RUN mkdir -p /app/uploads
